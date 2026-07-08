@@ -6,6 +6,7 @@ type SwitchProps = {
   checked: boolean
   onCheckedChange: (checked: boolean) => void
   id?: string
+  disabled?: boolean
   'aria-label'?: string
   className?: string
 }
@@ -14,6 +15,7 @@ function Switch({
   checked,
   onCheckedChange,
   id,
+  disabled,
   className,
   ...props
 }: SwitchProps) {
@@ -22,10 +24,11 @@ function Switch({
       type="button"
       role="switch"
       id={id}
+      disabled={disabled}
       aria-checked={checked}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
-        'relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors outline-none focus-visible:ring-4 focus-visible:ring-primary/20',
+        'relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors outline-none focus-visible:ring-4 focus-visible:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50',
         checked ? 'bg-primary' : 'bg-muted-foreground/30',
         className,
       )}
