@@ -4,10 +4,14 @@
 export type Finding = {
   region: string
   detail: string
+  status: 'attention' | 'normal'
+  tags: string[]
 }
 
 export type MockReport = {
   confidence: number
+  severity: 'Mild' | 'Moderate' | 'Severe'
+  diagnosis: string
   findings: Finding[]
   impression: string
   plainSummary: string
@@ -18,23 +22,35 @@ export type MockReport = {
 
 export const mockReport: MockReport = {
   confidence: 87,
+  severity: 'Mild',
+  diagnosis: 'Early-stage left lower lobe pneumonia',
   findings: [
     {
       region: 'Lower left lung field',
       detail:
         'Mild patchy opacity observed, consistent with early-stage pneumonia (lung inflammation).',
+      status: 'attention',
+      tags: ['Opacity', 'Left lobe', 'Inflammation'],
     },
     {
       region: 'Heart size',
-      detail: 'Cardiac silhouette is within normal limits. No enlargement noted.',
+      detail:
+        'Cardiac silhouette is within normal limits. No enlargement noted.',
+      status: 'normal',
+      tags: ['Cardiac', 'Normal'],
     },
     {
       region: 'Bony structures',
       detail: 'Ribs and spine appear intact with no visible fractures.',
+      status: 'normal',
+      tags: ['Skeletal', 'Normal'],
     },
     {
       region: 'Pleural spaces',
-      detail: 'No significant fluid collection (pleural effusion) detected.',
+      detail:
+        'No significant fluid collection (pleural effusion) detected.',
+      status: 'normal',
+      tags: ['Pleura', 'No effusion'],
     },
   ],
   impression:
@@ -46,30 +62,84 @@ export const mockReport: MockReport = {
   heatmap: { top: 52, left: 30, width: 22, height: 22 },
 }
 
+export type ReportTimelineStep = {
+  label: string
+  detail: string
+}
+
+export const reportTimeline: ReportTimelineStep[] = [
+  {
+    label: 'Image received',
+    detail: 'Chest X-ray uploaded and validated for analysis.',
+  },
+  {
+    label: 'Region detection',
+    detail: 'AI localized the lower left lung field for closer review.',
+  },
+  {
+    label: 'Pattern analysis',
+    detail: 'Opacity pattern matched to early inflammatory changes.',
+  },
+  {
+    label: 'Plain-language report',
+    detail: 'Findings translated into a patient-friendly explanation.',
+  },
+]
+
 export type Medicine = {
   name: string
+  category: string
   purpose: string
   relation: string
+  dosage: string
+  timing: string
+  sideEffects: string[]
+  warnings: string
+  interactions: string
 }
 
 export const mockMedicines: Medicine[] = [
   {
     name: 'Amoxicillin 500mg',
+    category: 'Antibiotic',
     purpose: 'An antibiotic that fights bacterial infections.',
     relation:
       'Prescribed to clear the bacteria causing the mild pneumonia seen in your left lung.',
+    dosage: '1 capsule (500mg)',
+    timing: '3 times daily, for 7 days',
+    sideEffects: ['Mild nausea', 'Diarrhea', 'Skin rash (rare)'],
+    warnings:
+      'Complete the full course even if you feel better. Tell your doctor about any penicillin allergy.',
+    interactions:
+      'May reduce the effectiveness of some birth control pills. Avoid combining with certain gout medicines.',
   },
   {
     name: 'Paracetamol 500mg',
+    category: 'Pain & Fever',
     purpose: 'A pain and fever reducer.',
     relation:
       'Helps ease any fever, body aches, or chest discomfort while your infection heals.',
+    dosage: '1–2 tablets (500–1000mg)',
+    timing: 'Every 6 hours as needed',
+    sideEffects: ['Generally well tolerated', 'Rare liver effects at high doses'],
+    warnings:
+      'Do not exceed 4000mg in 24 hours. Avoid other products that also contain paracetamol.',
+    interactions:
+      'Use caution with alcohol and blood-thinning medication such as warfarin.',
   },
   {
     name: 'Guaifenesin Syrup',
+    category: 'Cough Relief',
     purpose: 'A cough expectorant that loosens mucus.',
     relation:
       'Makes it easier to cough up mucus from your lungs, supporting your recovery.',
+    dosage: '10ml',
+    timing: 'Every 4 hours as needed',
+    sideEffects: ['Mild drowsiness', 'Upset stomach', 'Dizziness (uncommon)'],
+    warnings:
+      'Drink plenty of water to help it work. Speak to your doctor if cough lasts beyond 7 days.',
+    interactions:
+      'Generally safe, but check before combining with other cough or cold products.',
   },
 ]
 
@@ -127,4 +197,64 @@ export const cannedResponses = [
   "Understandably, this can feel worrying. The good news is your image shows an early, mild finding with no serious complications. Following your prescribed treatment closely gives you the best chance of a smooth recovery.",
   "For your specific situation, it's best to follow up with your doctor if your fever lasts more than 3 days, your breathing becomes difficult, or you feel significantly worse. Otherwise, continue your medicine as prescribed.",
   "Remember, this explanation is designed to help you understand your report in plain language. It does not replace your doctor's advice. Please share any concerns with your healthcare provider.",
+]
+
+export type Testimonial = {
+  quote: string
+  name: string
+  role: string
+}
+
+export const testimonials: Testimonial[] = [
+  {
+    quote:
+      'For the first time I actually understood my own X-ray. The plain-language summary put my mind at ease before I even spoke to my doctor.',
+    name: 'Sarah M.',
+    role: 'Patient',
+  },
+  {
+    quote:
+      'I use it to help my parents understand their scans. The visual highlight makes it so clear where the issue is.',
+    name: 'David L.',
+    role: 'Family caregiver',
+  },
+  {
+    quote:
+      'A genuinely thoughtful example of patient-centered AI. Explanations are calm, careful, and never overstate what the image shows.',
+    name: 'Dr. Amina R.',
+    role: 'Radiology consultant',
+  },
+]
+
+export type FAQItem = {
+  question: string
+  answer: string
+}
+
+export const faqItems: FAQItem[] = [
+  {
+    question: 'Is MedLumina a replacement for my doctor?',
+    answer:
+      'No. MedLumina is designed to help you understand your report in plain language. It never replaces professional medical advice, diagnosis, or treatment from your healthcare provider.',
+  },
+  {
+    question: 'How does the AI explanation work?',
+    answer:
+      'MedLumina reads your uploaded X-ray image and any report text, identifies the key findings, then translates the medical language into a clear, calm summary written for patients — not clinicians.',
+  },
+  {
+    question: 'Is my medical data private?',
+    answer:
+      'Privacy is built into the design. In this demo, everything runs locally with fictional sample data and nothing is stored or shared. A production version would use encryption and strict access controls.',
+  },
+  {
+    question: 'What types of scans are supported?',
+    answer:
+      'This demo focuses on chest X-rays. The same patient-friendly explanation approach can be extended to other radiology images over time.',
+  },
+  {
+    question: 'How accurate are the results?',
+    answer:
+      'Every explanation includes a confidence score and clearly states that findings must be confirmed by your doctor. The goal is understanding and reassurance, not a final diagnosis.',
+  },
 ]

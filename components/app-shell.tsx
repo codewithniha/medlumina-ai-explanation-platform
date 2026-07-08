@@ -2,7 +2,6 @@
 
 import { useState } from 'react'
 import {
-  Home,
   Upload,
   FileText,
   ScanEye,
@@ -11,10 +10,16 @@ import {
   ClipboardCheck,
   Menu,
   X,
-  Activity,
+  Home,
+  Settings,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Check,
+  History,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp, type ScreenId } from '@/lib/app-context'
+import { BrandLogo } from '@/components/brand-logo'
 
 type NavItem = {
   id: ScreenId
@@ -22,9 +27,8 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>
 }
 
-const navItems: NavItem[] = [
-  { id: 'overview', label: 'Overview', icon: Home },
-  { id: 'input', label: 'New Analysis', icon: Upload },
+const workflowNav: NavItem[] = [
+  { id: 'input', label: 'Upload X-ray', icon: Upload },
   { id: 'report', label: 'AI Report', icon: FileText },
   { id: 'visual', label: 'Visual Explanation', icon: ScanEye },
   { id: 'qa', label: 'Ask Questions', icon: MessagesSquare },
@@ -33,74 +37,263 @@ const navItems: NavItem[] = [
 ]
 
 // Mobile bottom-nav shows the most important destinations.
-const mobileItems = navItems.filter((n) =>
-  ['overview', 'input', 'report', 'qa', 'summary'].includes(n.id),
+const mobileItems = workflowNav.filter((n) =>
+  ['input', 'report', 'visual', 'qa', 'summary'].includes(n.id),
 )
 
-function Brand({ className }: { className?: string }) {
+const sessionHistory = [
+  { label: 'Chest X-ray · Left lung', date: 'Today' },
+  { label: 'Chest X-ray · Follow-up', date: '2 weeks ago' },
+]
+
+function ProgressCard({ collapsed }: { collapsed: boolean }) {
+  const { progress, completedSteps } = useApp()
+  if (collapsed) {
+    return (
+      <div className="mx-auto flex size-9 items-center justify-center rounded-lg bg-primary/10 text-xs font-bold text-primary">
+        {progress}
+      </div>
+    )
+  }
   return (
-    <div className={cn('flex items-center gap-2.5', className)}>
-      <div className="flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-        <Activity className="size-5" />
+    <div className="rounded-xl border border-border bg-card/60 p-3.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-foreground">
+          Your progress
+        </span>
+        <span className="text-xs font-bold text-primary">{progress}%</span>
       </div>
-      <div className="leading-tight">
-        <p className="text-base font-bold tracking-tight text-foreground">
-          MedLumina
-        </p>
-        <p className="text-[11px] font-medium text-muted-foreground">
-          X-ray, in plain language
-        </p>
+      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className="h-full rounded-full bg-primary transition-all duration-500 ease-out"
+          style={{ width: `${progress}%` }}
+        />
       </div>
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        {completedSteps.length} of {workflowNav.length} steps explored
+      </p>
     </div>
   )
 }
 
+function NavButton({
+  item,
+  index,
+  active,
+  completed,
+  collapsed,
+  onClick,
+}: {
+  item: NavItem
+  index: number
+  active: boolean
+  completed: boolean
+  collapsed: boolean
+  onClick: () => void
+}) {
+  const Icon = item.icon
+  return (
+    <button
+      onClick={onClick}
+      aria-current={active ? 'page' : undefined}
+      title={collapsed ? item.label : undefined}
+      className={cn(
+        'group relative flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200',
+        collapsed && 'justify-center px-0',
+        active
+          ? 'bg-primary text-primary-foreground shadow-[0_4px_16px_-4px_var(--color-primary)]'
+          : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+      )}
+    >
+      {active && !collapsed && (
+        <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-primary-foreground/80" />
+      )}
+      <span className="relative flex size-5 shrink-0 items-center justify-center">
+        <Icon className="size-[18px]" />
+        {completed && !active && (
+          <span className="absolute -right-1.5 -top-1.5 flex size-3 items-center justify-center rounded-full bg-primary text-primary-foreground">
+            <Check className="size-2" />
+          </span>
+        )}
+      </span>
+      {!collapsed && <span className="flex-1 text-left">{item.label}</span>}
+      {!collapsed && (
+        <span
+          className={cn(
+            'text-[11px] font-semibold tabular-nums',
+            active ? 'text-primary-foreground/70' : 'text-muted-foreground/60',
+          )}
+        >
+          {index + 1}
+        </span>
+      )}
+    </button>
+  )
+}
+
+function SidebarContent({
+  collapsed,
+  onNavigate,
+}: {
+  collapsed: boolean
+  onNavigate?: () => void
+}) {
+  const { screen, navigate, completedSteps } = useApp()
+  return (
+    <>
+      <nav className="flex-1 overflow-y-auto px-3">
+        {/* General group */}
+        {!collapsed && (
+          <p className="px-3 pb-2 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+            General
+          </p>
+        )}
+        <div className={cn('space-y-1', collapsed && 'pt-4')}>
+          <button
+            onClick={() => {
+              navigate('landing')
+              onNavigate?.()
+            }}
+            title={collapsed ? 'Home' : undefined}
+            className={cn(
+              'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+              collapsed && 'justify-center px-0',
+            )}
+          >
+            <Home className="size-[18px] shrink-0" />
+            {!collapsed && 'Home'}
+          </button>
+        </div>
+
+        {/* Workflow group */}
+        {!collapsed && (
+          <p className="px-3 pb-2 pt-5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+            Workflow
+          </p>
+        )}
+        <div className={cn('space-y-1', collapsed && 'pt-2')}>
+          {workflowNav.map((item, i) => (
+            <NavButton
+              key={item.id}
+              item={item}
+              index={i}
+              active={screen === item.id}
+              completed={completedSteps.includes(item.id)}
+              collapsed={collapsed}
+              onClick={() => {
+                navigate(item.id)
+                onNavigate?.()
+              }}
+            />
+          ))}
+        </div>
+
+        {/* Session history */}
+        {!collapsed && (
+          <>
+            <p className="flex items-center gap-1.5 px-3 pb-2 pt-6 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+              <History className="size-3" />
+              Recent sessions
+            </p>
+            <div className="space-y-1">
+              {sessionHistory.map((s) => (
+                <button
+                  key={s.label}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-sidebar-accent"
+                >
+                  <span className="size-1.5 shrink-0 rounded-full bg-primary/60" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-medium text-sidebar-foreground">
+                      {s.label}
+                    </span>
+                    <span className="block text-[11px] text-muted-foreground">
+                      {s.date}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </nav>
+
+      {/* Footer: progress + profile */}
+      <div className="space-y-3 border-t border-sidebar-border p-3">
+        <ProgressCard collapsed={collapsed} />
+        <button
+          title={collapsed ? 'Settings' : undefined}
+          className={cn(
+            'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent',
+            collapsed && 'justify-center px-0',
+          )}
+        >
+          <Settings className="size-[18px] shrink-0" />
+          {!collapsed && 'Settings'}
+        </button>
+        <div
+          className={cn(
+            'flex items-center gap-3 rounded-xl border border-sidebar-border bg-card/60 p-2.5',
+            collapsed && 'justify-center border-0 bg-transparent p-0',
+          )}
+        >
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-bold text-primary">
+            AP
+          </div>
+          {!collapsed && (
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-sidebar-foreground">
+                Alex Patient
+              </p>
+              <p className="truncate text-[11px] text-muted-foreground">
+                Demo account
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { screen, navigate } = useApp()
+  const { screen } = useApp()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
 
   return (
     <div className="min-h-dvh bg-background lg:flex">
       {/* Desktop sidebar */}
-      <aside className="sticky top-0 hidden h-dvh w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
-        <div className="p-6">
-          <Brand />
+      <aside
+        className={cn(
+          'sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-sidebar-border bg-sidebar transition-[width] duration-300 ease-out lg:flex',
+          collapsed ? 'w-20' : 'w-72',
+        )}
+      >
+        <div
+          className={cn(
+            'flex items-center gap-2 p-4',
+            collapsed ? 'justify-center' : 'justify-between',
+          )}
+        >
+          {!collapsed && <BrandLogo />}
+          <button
+            onClick={() => setCollapsed((v) => !v)}
+            className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {collapsed ? (
+              <PanelLeftOpen className="size-5" />
+            ) : (
+              <PanelLeftClose className="size-5" />
+            )}
+          </button>
         </div>
-        <nav className="flex-1 space-y-1 px-4">
-          {navItems.map((item) => {
-            const active = screen === item.id
-            const Icon = item.icon
-            return (
-              <button
-                key={item.id}
-                onClick={() => navigate(item.id)}
-                aria-current={active ? 'page' : undefined}
-                className={cn(
-                  'flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-medium transition-colors',
-                  active
-                    ? 'bg-primary text-primary-foreground shadow-sm'
-                    : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-                )}
-              >
-                <Icon className="size-[18px] shrink-0" />
-                {item.label}
-              </button>
-            )
-          })}
-        </nav>
-        <div className="p-4">
-          <div className="rounded-xl bg-accent/60 p-4">
-            <p className="text-xs font-medium leading-relaxed text-accent-foreground">
-              Demo prototype. All reports and explanations are fictional sample
-              data and not medical advice.
-            </p>
-          </div>
-        </div>
+        <SidebarContent collapsed={collapsed} />
       </aside>
 
       {/* Mobile top bar */}
-      <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/90 px-4 py-3 backdrop-blur lg:hidden">
-        <Brand />
+      <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border bg-background/80 px-4 py-3 backdrop-blur-xl lg:hidden">
+        <BrandLogo />
         <button
           onClick={() => setMobileOpen((v) => !v)}
           className="flex size-10 items-center justify-center rounded-xl text-foreground transition-colors hover:bg-muted"
@@ -112,65 +305,72 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Mobile slide-down menu */}
       {mobileOpen && (
-        <div className="fixed inset-0 top-[61px] z-30 bg-black/20 lg:hidden" onClick={() => setMobileOpen(false)}>
-          <nav
-            className="space-y-1 border-b border-border bg-background p-4 shadow-lg"
+        <div
+          className="fixed inset-0 top-[57px] z-30 bg-black/50 backdrop-blur-sm lg:hidden"
+          onClick={() => setMobileOpen(false)}
+        >
+          <div
+            className="flex max-h-[calc(100dvh-57px)] flex-col overflow-hidden border-b border-border bg-sidebar shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            {navItems.map((item) => {
-              const active = screen === item.id
-              const Icon = item.icon
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => {
-                    navigate(item.id)
-                    setMobileOpen(false)
-                  }}
-                  className={cn(
-                    'flex w-full items-center gap-3 rounded-xl px-3.5 py-3 text-sm font-medium transition-colors',
-                    active
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-foreground hover:bg-muted',
-                  )}
-                >
-                  <Icon className="size-[18px] shrink-0" />
-                  {item.label}
-                </button>
-              )
-            })}
-          </nav>
+            <SidebarContent
+              collapsed={false}
+              onNavigate={() => setMobileOpen(false)}
+            />
+          </div>
         </div>
       )}
 
       {/* Main content */}
       <main className="flex-1 pb-24 lg:pb-0">
-        <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 sm:py-10">
+        <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-10 lg:py-12">
           {children}
         </div>
       </main>
 
       {/* Mobile bottom nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-around border-t border-border bg-background/95 px-2 py-2 backdrop-blur lg:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-around border-t border-border bg-background/95 px-2 py-2 backdrop-blur-xl lg:hidden">
         {mobileItems.map((item) => {
           const active = screen === item.id
           const Icon = item.icon
           return (
-            <button
+            <MobileNavButton
               key={item.id}
-              onClick={() => navigate(item.id)}
-              className={cn(
-                'flex flex-1 flex-col items-center gap-1 rounded-lg py-1.5 text-[11px] font-medium transition-colors',
-                active ? 'text-primary' : 'text-muted-foreground',
-              )}
-              aria-current={active ? 'page' : undefined}
-            >
-              <Icon className="size-5" />
-              {item.label.split(' ')[0]}
-            </button>
+              id={item.id}
+              label={item.label}
+              Icon={Icon}
+              active={active}
+            />
           )
         })}
       </nav>
     </div>
+  )
+}
+
+function MobileNavButton({
+  id,
+  label,
+  Icon,
+  active,
+}: {
+  id: ScreenId
+  label: string
+  Icon: React.ComponentType<{ className?: string }>
+  active: boolean
+}) {
+  const { navigate } = useApp()
+  return (
+    <button
+      onClick={() => navigate(id)}
+      className={cn(
+        'flex flex-1 flex-col items-center gap-1 rounded-lg py-1.5 text-[11px] font-medium transition-colors',
+        active ? 'text-primary' : 'text-muted-foreground',
+      )}
+      aria-current={active ? 'page' : undefined}
+    >
+      <Icon className="size-5" />
+      {label.split(' ')[0]}
+    </button>
   )
 }
