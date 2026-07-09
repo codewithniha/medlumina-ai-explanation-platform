@@ -108,7 +108,7 @@ function ControlSlider({
 }
 
 export function VisualScreen() {
-  const { navigate } = useApp()
+  const { navigate, stepEyebrow } = useApp()
   const [showOverlay, setShowOverlay] = useState(true)
   const [showAnnotation, setShowAnnotation] = useState(true)
   const [compareMode, setCompareMode] = useState(false)
@@ -167,7 +167,7 @@ export function VisualScreen() {
   return (
     <div>
       <PageHeader
-        eyebrow="Step 3 of 6"
+        eyebrow={stepEyebrow('visual')}
         title="Visual Explanation"
         description="Explore your X-ray with zoom, overlays, and a side-by-side comparison. The colored area shows where the finding is."
       />

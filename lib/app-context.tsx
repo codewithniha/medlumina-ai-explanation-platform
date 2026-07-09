@@ -18,17 +18,21 @@ export type ScreenId =
   | 'medicine'
   | 'summary'
 
-// The ordered patient workflow, used to power the sidebar progress indicator.
-export const workflowSteps: ScreenId[] = [
-  'input',
-  'report',
-  'visual',
-  'qa',
-  'medicine',
-  'summary',
-]
+// The three ways a patient can use MedLumina.
+export type InputMode = 'xray_report' | 'xray_only' | 'prescription_only'
+
+// Which workflow steps exist for each input mode, in order. This powers both
+// the sidebar stepper and the progress indicator.
+export const modeSteps: Record<InputMode, ScreenId[]> = {
+  xray_report: ['input', 'report', 'visual', 'qa', 'medicine', 'summary'],
+  xray_only: ['input', 'report', 'visual', 'qa', 'medicine', 'summary'],
+  // Prescription-only has no image, so "Visual Explanation" is dropped and the
+  // medicine content is folded into step 2 ("Medicine & Condition Insight").
+  prescription_only: ['input', 'report', 'qa', 'summary'],
+}
 
 export type SessionData = {
+  inputMode: InputMode
   reportText: string
   medicines: string[]
   symptoms: string
@@ -37,6 +41,7 @@ export type SessionData = {
 }
 
 const emptySession: SessionData = {
+  inputMode: 'xray_report',
   reportText: '',
   medicines: [],
   symptoms: '',
@@ -49,9 +54,12 @@ type AppContextValue = {
   navigate: (screen: ScreenId) => void
   session: SessionData
   setSession: (updater: Partial<SessionData>) => void
+  setInputMode: (mode: InputMode) => void
   resetSession: () => void
   progress: number
   completedSteps: ScreenId[]
+  steps: ScreenId[]
+  stepEyebrow: (screen: ScreenId) => string
 }
 
 const AppContext = createContext<AppContextValue | null>(null)
@@ -78,20 +86,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSessionState((prev) => ({ ...prev, ...updater }))
   }, [])
 
+  // Switching mode resets only the mode-specific steps — the Upload step stays
+  // "visited" so the patient isn't kicked back to a blank slate on a reload.
+  const setInputMode = useCallback((mode: InputMode) => {
+    setSessionState((prev) => {
+      if (prev.inputMode === mode) return prev
+      return { ...prev, inputMode: mode, analyzed: false }
+    })
+    setVisited((prev) => {
+      const next = new Set<ScreenId>()
+      if (prev.has('input')) next.add('input')
+      return next
+    })
+  }, [])
+
   const resetSession = useCallback(() => {
     setSessionState(emptySession)
     setVisited(new Set())
     setScreen('input')
   }, [])
 
+  const steps = useMemo(() => modeSteps[session.inputMode], [session.inputMode])
+
   const completedSteps = useMemo(
-    () => workflowSteps.filter((s) => visited.has(s)),
-    [visited],
+    () => steps.filter((s) => visited.has(s)),
+    [steps, visited],
   )
 
   const progress = useMemo(() => {
-    return Math.round((completedSteps.length / workflowSteps.length) * 100)
-  }, [completedSteps])
+    return Math.round((completedSteps.length / steps.length) * 100)
+  }, [completedSteps, steps])
+
+  const stepEyebrow = useCallback(
+    (target: ScreenId) => {
+      const idx = steps.indexOf(target)
+      if (idx === -1) return ''
+      return `Step ${idx + 1} of ${steps.length}`
+    },
+    [steps],
+  )
 
   return (
     <AppContext.Provider
@@ -100,9 +133,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         navigate,
         session,
         setSession,
+        setInputMode,
         resetSession,
         progress,
         completedSteps,
+        steps,
+        stepEyebrow,
       }}
     >
       {children}

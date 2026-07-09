@@ -13,14 +13,24 @@ import {
   Activity,
   Gauge,
   ShieldCheck,
+  ShieldAlert,
+  Pill,
+  Sparkles,
+  FileCheck2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { ConfidenceRing } from '@/components/confidence-ring'
 import { PageHeader } from './page-header'
+import { MedicineCard } from './medicine-screen'
 import { useApp } from '@/lib/app-context'
-import { mockReport, reportTimeline } from '@/lib/mock-data'
+import {
+  mockReport,
+  reportTimeline,
+  mockMedicines,
+  mockInferredCondition,
+} from '@/lib/mock-data'
 import { cn } from '@/lib/utils'
 
 function StatCard({
@@ -136,16 +146,138 @@ function FindingRow({
   )
 }
 
-export function ReportScreen() {
-  const { navigate } = useApp()
-  const report = mockReport
+// Mode C: Medicine & Condition Insight — no image, so medicines are the primary
+// analysis and the likely condition is inferred from them.
+function PrescriptionInsight() {
+  const { navigate, stepEyebrow } = useApp()
+  const inferred = mockInferredCondition
 
   return (
     <div>
       <PageHeader
-        eyebrow="Step 2 of 6"
-        title="Your AI Report"
-        description="A structured reading of your X-ray, followed by a plain-language summary of what it means for you."
+        eyebrow={stepEyebrow('report')}
+        title="Medicine & Condition Insight"
+        description="Here is what each prescribed medicine is for, and the most likely condition suggested by the combination."
+      />
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        {/* Medicines */}
+        <div className="space-y-4 lg:col-span-7">
+          <div className="flex items-center gap-2">
+            <Pill className="size-5 text-primary" />
+            <h2 className="text-base font-bold text-foreground">
+              Your prescribed medicines
+            </h2>
+            <Badge variant="secondary" className="ml-1">
+              {mockMedicines.length}
+            </Badge>
+          </div>
+          {mockMedicines.map((medicine) => (
+            <MedicineCard key={medicine.name} medicine={medicine} />
+          ))}
+        </div>
+
+        {/* Inferred condition */}
+        <div className="space-y-4 lg:col-span-5">
+          <Card className="overflow-hidden border-primary/25">
+            <div className="bg-gradient-to-br from-primary/10 via-card to-card">
+              <CardContent className="p-6">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="size-5 text-primary" />
+                  <h3 className="text-base font-bold text-foreground">
+                    Possible condition based on your medicines
+                  </h3>
+                </div>
+                <div className="mt-4 flex items-center gap-4">
+                  <ConfidenceRing value={inferred.confidence} />
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Inference confidence
+                    </p>
+                    <p className="text-sm font-semibold text-foreground">
+                      {inferred.confidence}% likely
+                    </p>
+                  </div>
+                </div>
+                <p className="mt-4 text-lg font-bold text-foreground text-balance">
+                  {inferred.condition}
+                </p>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                  {inferred.reasoning}
+                </p>
+                <ul className="mt-4 space-y-2">
+                  {inferred.signals.map((sig) => (
+                    <li
+                      key={sig}
+                      className="flex items-start gap-2 text-sm text-foreground/90"
+                    >
+                      <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-primary" />
+                      {sig}
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </div>
+          </Card>
+
+          <Card className="border-amber-500/25 bg-amber-500/5">
+            <CardContent className="flex gap-3 p-5">
+              <ShieldAlert className="mt-0.5 size-5 shrink-0 text-amber-400" />
+              <div>
+                <p className="text-sm font-semibold text-foreground">
+                  This is not a diagnosis
+                </p>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                  This possible condition is inferred only from what your
+                  medicines are typically used for — no X-ray or scan was
+                  reviewed. It must be confirmed by a doctor before you act on
+                  it.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+        <Button className="h-12 px-6 text-base" onClick={() => navigate('qa')}>
+          <Sparkles className="size-4" />
+          Ask a Question
+          <ArrowRight className="size-4" />
+        </Button>
+        <Button
+          variant="outline"
+          className="h-12 px-6 text-base"
+          onClick={() => navigate('summary')}
+        >
+          View full summary
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+export function ReportScreen() {
+  const { navigate, session, stepEyebrow } = useApp()
+  const mode = session.inputMode
+
+  if (mode === 'prescription_only') {
+    return <PrescriptionInsight />
+  }
+
+  const report = mockReport
+  const isReportMode = mode === 'xray_report'
+
+  return (
+    <div>
+      <PageHeader
+        eyebrow={stepEyebrow('report')}
+        title={isReportMode ? 'Your Report, Explained' : 'Your AI-Generated Report'}
+        description={
+          isReportMode
+            ? 'Your doctor\u2019s findings, confirmed against the image and translated into plain language.'
+            : 'A preliminary reading generated from your X-ray image, followed by a plain-language summary of what it means for you.'
+        }
       />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
@@ -162,20 +294,61 @@ export function ReportScreen() {
                       <Stethoscope className="size-3.5" />
                       {report.severity} finding
                     </Badge>
-                    <Badge variant="secondary">Chest X-ray · PA view</Badge>
+                    <Badge variant="secondary">
+                      {isReportMode ? 'From your report' : 'Chest X-ray · PA view'}
+                    </Badge>
                   </div>
                   <h2 className="mt-3 text-xl font-bold text-foreground text-balance">
                     {report.diagnosis}
                   </h2>
                   <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                    The AI is {report.confidence}% confident in this reading. A
-                    confidence score reflects how clearly the pattern appears —
-                    it is not a diagnosis and should be confirmed by your doctor.
+                    {isReportMode
+                      ? `This ${report.confidence}% is the match confidence between the image and your doctor\u2019s report — the diagnosis comes from your doctor, not the model.`
+                      : `The AI is ${report.confidence}% confident in this reading. A confidence score reflects how clearly the pattern appears — it is not a diagnosis and should be confirmed by your doctor.`}
                   </p>
                 </div>
               </CardContent>
             </div>
           </Card>
+
+          {/* Mode B: strengthened disclaimer that this is model-generated. */}
+          {!isReportMode && (
+            <Card className="border-amber-500/25 bg-amber-500/5">
+              <CardContent className="flex gap-3 p-5">
+                <ShieldAlert className="mt-0.5 size-5 shrink-0 text-amber-400" />
+                <div>
+                  <p className="text-sm font-semibold text-foreground">
+                    Model-generated from the image alone
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                    No physician report was provided, so this entire report was
+                    generated by the model from your X-ray image only. It is a
+                    preliminary explanation, not a diagnosis, and must be
+                    reviewed and confirmed by a qualified doctor.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Mode A: confirmation that findings come from the doctor's report. */}
+          {isReportMode && (
+            <Card className="border-primary/25 bg-primary/5">
+              <CardContent className="flex gap-3 p-5">
+                <FileCheck2 className="mt-0.5 size-5 shrink-0 text-primary" />
+                <div>
+                  <p className="text-sm font-semibold text-foreground">
+                    Confirmed from your doctor&apos;s report
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                    The findings below are taken from the report you provided
+                    and matched to the image — we&apos;ve simply rewritten them
+                    in plain language, not re-diagnosed from scratch.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Findings */}
           <div>
@@ -236,7 +409,7 @@ export function ReportScreen() {
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-1">
             <StatCard
               icon={Gauge}
-              label="Confidence"
+              label={isReportMode ? 'Match confidence' : 'Confidence'}
               value={`${report.confidence}% high`}
             />
             <StatCard
