@@ -19,7 +19,7 @@ import { PageHeader } from './page-header'
 import { BrandLogo } from '@/components/brand-logo'
 import { useToast } from '@/components/ui/toast'
 import { useApp } from '@/lib/app-context'
-import { mockReport, mockMedicines } from '@/lib/mock-data'
+import { mockReport, mockMedicines, mockInferredCondition } from '@/lib/mock-data'
 
 const nextSteps = [
   'Take your full course of antibiotics, even if you feel better.',
@@ -60,13 +60,31 @@ function SummaryBlock({
 
 export function SummaryScreen() {
   const { toast } = useToast()
-  const { resetSession } = useApp()
+  const { resetSession, session, stepEyebrow } = useApp()
+  const isPrescription = session.inputMode === 'prescription_only'
+
+  const headerCards = isPrescription
+    ? [
+        { label: 'Input type', value: 'Prescription' },
+        { label: 'Medicines', value: `${mockMedicines.length} items` },
+        { label: 'Possible condition', value: 'Chest infection' },
+        {
+          label: 'Inference confidence',
+          value: `${mockInferredCondition.confidence}%`,
+        },
+      ]
+    : [
+        { label: 'Scan type', value: 'Chest X-ray (PA)' },
+        { label: 'Confidence', value: `${mockReport.confidence}%` },
+        { label: 'Severity', value: mockReport.severity },
+        { label: 'Medicines', value: `${mockMedicines.length} items` },
+      ]
 
   return (
     <div className="mx-auto max-w-4xl">
       <div className="print:hidden">
         <PageHeader
-          eyebrow="Step 6 of 6"
+          eyebrow={stepEyebrow('summary')}
           title="Your summary"
           description="A complete, easy-to-keep overview of your results, medicines, and what to do next. Print it or save it to share with your doctor."
         />
@@ -78,12 +96,14 @@ export function SummaryScreen() {
         <div className="border-b border-border bg-gradient-to-br from-primary/10 to-transparent px-6 py-6 sm:px-8">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <BrandLogo />
+              <BrandLogo showTagline={!isPrescription} />
               <p className="mt-3 text-lg font-bold text-foreground">
                 Patient Summary Report
               </p>
               <p className="text-xs text-muted-foreground">
-                Plain-language explanation of your chest X-ray
+                {isPrescription
+                  ? 'Plain-language explanation of your prescription'
+                  : 'Plain-language explanation of your chest X-ray'}
               </p>
             </div>
             <div className="text-right text-xs text-muted-foreground">
@@ -96,18 +116,15 @@ export function SummaryScreen() {
                 ML-2026-0472
               </p>
               <Badge variant="warning" className="mt-2">
-                {mockReport.severity} finding
+                {isPrescription
+                  ? 'Inferred insight'
+                  : `${mockReport.severity} finding`}
               </Badge>
             </div>
           </div>
 
           <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {[
-              { label: 'Scan type', value: 'Chest X-ray (PA)' },
-              { label: 'Confidence', value: `${mockReport.confidence}%` },
-              { label: 'Severity', value: mockReport.severity },
-              { label: 'Medicines', value: `${mockMedicines.length} items` },
-            ].map((item) => (
+            {headerCards.map((item) => (
               <div
                 key={item.label}
                 className="rounded-xl border border-border bg-background/60 p-3"
@@ -124,17 +141,40 @@ export function SummaryScreen() {
         </div>
 
         <div className="px-6 py-1 sm:px-8">
-          <SummaryBlock icon={Lightbulb} title="Diagnosis explanation">
-            Your chest X-ray shows a small area of early-stage infection
-            (pneumonia) in the lower part of your left lung. Your heart, bones,
-            and pleural spaces look normal. This was caught early and is very
-            treatable.
+          <SummaryBlock
+            icon={Lightbulb}
+            title={
+              isPrescription
+                ? 'Possible condition explanation'
+                : 'Diagnosis explanation'
+            }
+          >
+            {isPrescription ? (
+              <>
+                {mockInferredCondition.reasoning} The most likely condition
+                behind this prescription is{' '}
+                <span className="font-medium text-foreground">
+                  {mockInferredCondition.condition}
+                </span>
+                . This is inferred from your medicines only and must be
+                confirmed by a doctor.
+              </>
+            ) : (
+              <>
+                Your chest X-ray shows a small area of early-stage infection
+                (pneumonia) in the lower part of your left lung. Your heart,
+                bones, and pleural spaces look normal. This was caught early and
+                is very treatable.
+              </>
+            )}
           </SummaryBlock>
 
-          <SummaryBlock icon={ScanEye} title="Key visual finding">
-            {mockReport.findings[0].detail} The highlighted region on your
-            visual explanation marks exactly where this appears.
-          </SummaryBlock>
+          {!isPrescription && (
+            <SummaryBlock icon={ScanEye} title="Key visual finding">
+              {mockReport.findings[0].detail} The highlighted region on your
+              visual explanation marks exactly where this appears.
+            </SummaryBlock>
+          )}
 
           <SummaryBlock icon={Pill} title="Medicine overview">
             <ul className="space-y-1.5">

@@ -29,7 +29,7 @@ const categoryStyles: Record<string, string> = {
   'Cough Relief': 'bg-chart-2/15 text-chart-2 border-chart-2/30',
 }
 
-function MedicineCard({ medicine }: { medicine: Medicine }) {
+export function MedicineCard({ medicine }: { medicine: Medicine }) {
   const [open, setOpen] = useState(false)
 
   return (
@@ -151,12 +151,12 @@ function MedicineCard({ medicine }: { medicine: Medicine }) {
 }
 
 export function MedicineScreen() {
-  const { navigate } = useApp()
+  const { navigate, stepEyebrow } = useApp()
 
   return (
     <div className="mx-auto max-w-5xl">
       <PageHeader
-        eyebrow="Step 5 of 6"
+        eyebrow={stepEyebrow('medicine')}
         title="Medicine & symptoms"
         description="Understand what your medicines do, how to take them, and how your symptoms connect to the findings on your scan."
       />

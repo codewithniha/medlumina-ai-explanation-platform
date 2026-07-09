@@ -191,6 +191,35 @@ export const suggestedQuestions = [
   'When should I see my doctor?',
 ]
 
+// Prescription-only mode swaps in medicine-focused quick questions.
+export const prescriptionSuggestedQuestions = [
+  'What is this medicine for?',
+  'What condition might cause this combination?',
+  'Are there side effects I should know about?',
+  'How should I take these together?',
+]
+
+// A plain-language condition inferred purely from the medicine combination.
+// This is NOT a diagnosis — it is synthesized from what each medicine treats.
+export type InferredCondition = {
+  condition: string
+  reasoning: string
+  confidence: number
+  signals: string[]
+}
+
+export const mockInferredCondition: InferredCondition = {
+  condition: 'A bacterial respiratory infection (such as a chest infection or mild pneumonia)',
+  reasoning:
+    'Your prescription pairs an antibiotic with a fever/pain reducer and a cough expectorant. This combination is most commonly used to treat and ease the symptoms of a bacterial infection in the chest or airways.',
+  confidence: 78,
+  signals: [
+    'Antibiotic points to a bacterial infection',
+    'Expectorant suggests a productive cough',
+    'Fever reducer indicates inflammation or fever',
+  ],
+}
+
 // Canned responses used to fake the assistant when the user sends a question.
 export const cannedResponses = [
   "That's a great question. Based on your X-ray, this mild lung infection typically improves within 1 to 2 weeks once you start your antibiotics. Rest, fluids, and finishing your full course of medicine are key. Always check with your doctor if symptoms worsen.",

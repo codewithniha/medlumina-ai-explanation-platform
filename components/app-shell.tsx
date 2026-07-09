@@ -18,7 +18,7 @@ import {
   History,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useApp, type ScreenId } from '@/lib/app-context'
+import { useApp, type ScreenId, type InputMode } from '@/lib/app-context'
 import { BrandLogo } from '@/components/brand-logo'
 
 type NavItem = {
@@ -27,19 +27,46 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>
 }
 
-const workflowNav: NavItem[] = [
-  { id: 'input', label: 'Upload X-ray', icon: Upload },
-  { id: 'report', label: 'AI Report', icon: FileText },
-  { id: 'visual', label: 'Visual Explanation', icon: ScanEye },
-  { id: 'qa', label: 'Ask Questions', icon: MessagesSquare },
-  { id: 'medicine', label: 'Medicine & Symptoms', icon: Pill },
-  { id: 'summary', label: 'Summary', icon: ClipboardCheck },
-]
+// Per-step icon plus a default label and any mode-specific label overrides.
+// The sidebar is built from the active mode's step list (see lib/app-context),
+// so steps that don't apply to a mode are removed entirely, not disabled.
+const stepMeta: Record<
+  Exclude<ScreenId, 'landing'>,
+  {
+    icon: React.ComponentType<{ className?: string }>
+    label: string
+    labelByMode?: Partial<Record<InputMode, string>>
+  }
+> = {
+  input: {
+    icon: Upload,
+    label: 'Upload X-ray',
+    labelByMode: { prescription_only: 'Upload Prescription' },
+  },
+  report: {
+    icon: FileText,
+    label: 'AI Report',
+    labelByMode: {
+      xray_report: 'Your Report',
+      prescription_only: 'Medicine & Condition',
+    },
+  },
+  visual: { icon: ScanEye, label: 'Visual Explanation' },
+  qa: { icon: MessagesSquare, label: 'Ask Questions' },
+  medicine: { icon: Pill, label: 'Medicine & Symptoms' },
+  summary: { icon: ClipboardCheck, label: 'Summary' },
+}
 
-// Mobile bottom-nav shows the most important destinations.
-const mobileItems = workflowNav.filter((n) =>
-  ['input', 'report', 'visual', 'qa', 'summary'].includes(n.id),
-)
+function buildNav(mode: InputMode, steps: ScreenId[]): NavItem[] {
+  return steps.map((id) => {
+    const meta = stepMeta[id as Exclude<ScreenId, 'landing'>]
+    return {
+      id,
+      icon: meta.icon,
+      label: meta.labelByMode?.[mode] ?? meta.label,
+    }
+  })
+}
 
 const sessionHistory = [
   { label: 'Chest X-ray · Left lung', date: 'Today' },
@@ -47,7 +74,7 @@ const sessionHistory = [
 ]
 
 function ProgressCard({ collapsed }: { collapsed: boolean }) {
-  const { progress, completedSteps } = useApp()
+  const { progress, completedSteps, steps } = useApp()
   if (collapsed) {
     return (
       <div className="mx-auto flex size-9 items-center justify-center rounded-lg bg-primary/10 text-xs font-bold text-primary">
@@ -70,7 +97,7 @@ function ProgressCard({ collapsed }: { collapsed: boolean }) {
         />
       </div>
       <p className="mt-2 text-[11px] text-muted-foreground">
-        {completedSteps.length} of {workflowNav.length} steps explored
+        {completedSteps.length} of {steps.length} steps explored
       </p>
     </div>
   )
@@ -138,7 +165,8 @@ function SidebarContent({
   collapsed: boolean
   onNavigate?: () => void
 }) {
-  const { screen, navigate, completedSteps } = useApp()
+  const { screen, navigate, completedSteps, session, steps } = useApp()
+  const workflowNav = buildNav(session.inputMode, steps)
   return (
     <>
       <nav className="flex-1 overflow-y-auto px-3">
@@ -256,9 +284,15 @@ function SidebarContent({
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { screen } = useApp()
+  const { screen, session, steps } = useApp()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
+
+  // Mobile bottom-nav mirrors the active mode's steps (skipping the deep
+  // "medicine" step to keep the bar compact when it exists).
+  const mobileItems = buildNav(session.inputMode, steps).filter(
+    (n) => n.id !== 'medicine',
+  )
 
   return (
     <div className="min-h-dvh bg-background lg:flex">

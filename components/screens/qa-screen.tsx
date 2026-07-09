@@ -16,10 +16,12 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { PageHeader } from './page-header'
 import { useToast } from '@/components/ui/toast'
+import { useApp } from '@/lib/app-context'
 import { cn } from '@/lib/utils'
 import {
   initialQA,
   suggestedQuestions,
+  prescriptionSuggestedQuestions,
   cannedResponses,
   type QAMessage,
 } from '@/lib/mock-data'
@@ -98,6 +100,11 @@ function MessageBubble({
 
 export function QAScreen() {
   const { toast } = useToast()
+  const { session, stepEyebrow } = useApp()
+  const isPrescription = session.inputMode === 'prescription_only'
+  const chips = isPrescription
+    ? prescriptionSuggestedQuestions
+    : suggestedQuestions
   const [messages, setMessages] = useState<QAMessage[]>(initialQA)
   const [input, setInput] = useState('')
   const [typing, setTyping] = useState(false)
@@ -162,7 +169,7 @@ export function QAScreen() {
   return (
     <div>
       <PageHeader
-        eyebrow="Step 4 of 6"
+        eyebrow={stepEyebrow('qa')}
         title="Ask Questions"
         description="Ask anything about your results in your own words. Answers are calm, clear, and easy to follow."
         className="mb-6"
@@ -232,7 +239,7 @@ export function QAScreen() {
 
             {/* Suggested chips */}
             <div className="flex flex-wrap gap-2 border-t border-border px-4 pt-3">
-              {suggestedQuestions.map((q) => (
+              {chips.map((q) => (
                 <button
                   key={q}
                   onClick={() => send(q)}
@@ -305,10 +312,21 @@ export function QAScreen() {
                 Things you can ask
               </h3>
               <ul className="mt-3 space-y-2.5 text-sm text-muted-foreground">
-                <li>What does my confidence score mean?</li>
-                <li>How long is the recovery for this?</li>
-                <li>Which medicine treats the infection?</li>
-                <li>What warning signs should I watch for?</li>
+                {isPrescription ? (
+                  <>
+                    <li>What is each medicine for?</li>
+                    <li>What condition might these medicines treat?</li>
+                    <li>Are there side effects I should know about?</li>
+                    <li>Can I take these medicines together?</li>
+                  </>
+                ) : (
+                  <>
+                    <li>What does my confidence score mean?</li>
+                    <li>How long is the recovery for this?</li>
+                    <li>Which medicine treats the infection?</li>
+                    <li>What warning signs should I watch for?</li>
+                  </>
+                )}
               </ul>
             </CardContent>
           </Card>
