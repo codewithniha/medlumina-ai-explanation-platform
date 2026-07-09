@@ -180,10 +180,26 @@ export function InputScreen() {
   const [xrayOptionalOpen, setXrayOptionalOpen] = useState(false)
 
   const hasImage = phase === 'ready'
+  const hasReport = reportText.trim().length > 0
   const processingSteps = isPrescription
     ? prescriptionProcessingSteps
     : xrayProcessingSteps
-  const canAnalyze = isPrescription ? medicines.length > 0 : hasImage
+  // Mode A needs both the image and the doctor's report; Mode B needs the
+  // image; Mode C needs at least one medicine.
+  const canAnalyze = isPrescription
+    ? medicines.length > 0
+    : mode === 'xray_report'
+      ? hasImage && hasReport
+      : hasImage
+
+  // Mode-specific helper text shown under the disabled Analyze button.
+  const helperText = isPrescription
+    ? 'Add at least one prescribed medicine to enable analysis.'
+    : mode === 'xray_report'
+      ? !hasImage
+        ? 'Add an X-ray image to enable analysis.'
+        : 'Add your doctor\u2019s report to enable analysis.'
+      : 'Add an X-ray image to enable analysis.'
 
   // Simulate an upload with a progress bar, then reveal the preview.
   function startUpload() {
