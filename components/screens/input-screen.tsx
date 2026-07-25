@@ -24,6 +24,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader } from './page-header'
 import { useApp, type InputMode } from '@/lib/app-context'
+import { runAnalysis } from '@/lib/api-client'
 import { cn } from '@/lib/utils'
 
 type UploadPhase = 'idle' | 'uploading' | 'ready'
@@ -178,6 +179,9 @@ export function InputScreen() {
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzeStep, setAnalyzeStep] = useState(0)
   const [xrayOptionalOpen, setXrayOptionalOpen] = useState(false)
+  const [imageFile, setImageFile] = useState<File | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const hasImage = phase === 'ready'
   const hasReport = reportText.trim().length > 0
@@ -201,10 +205,28 @@ export function InputScreen() {
         : 'Add your doctor\u2019s report to enable analysis.'
       : 'Add an X-ray image to enable analysis.'
 
-  // Simulate an upload with a progress bar, then reveal the preview.
-  function startUpload() {
+  // Takes the real File the patient picked or dropped, previews it locally,
+  // and plays a short progress animation before revealing it (the actual
+  // upload to the backend only happens later, when Analyze is clicked).
+  function handleFile(file: File) {
     if (phase !== 'idle') return
+    if (!file.type.startsWith('image/')) return
+    setImageFile(file)
+    setPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return URL.createObjectURL(file)
+    })
     setPhase('uploading')
+    setProgress(0)
+  }
+
+  function removeImage() {
+    setPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return null
+    })
+    setImageFile(null)
+    setPhase('idle')
     setProgress(0)
   }
 
@@ -240,20 +262,48 @@ export function InputScreen() {
     setMedInput('')
   }
 
-  function analyze() {
+  async function analyze() {
     setAnalyzing(true)
     setAnalyzeStep(0)
-    setSession({
-      reportText,
-      symptoms,
-      medicines,
-      hasImage,
-      analyzed: true,
-    })
-    setTimeout(() => {
+    setErrorMessage(null)
+    setSession({ reportText, symptoms, medicines, hasImage })
+
+    // Prescription-only has no backend wired up yet — Module 2/5 only handle
+    // X-ray images, and the medicine/condition-inference module (3/6) wasn't
+    // part of what was uploaded, so this mode stays on demo data for now.
+    if (isPrescription) {
+      setTimeout(() => {
+        setAnalyzing(false)
+        setSession({ analyzed: true })
+        navigate('report')
+      }, 2400)
+      return
+    }
+
+    if (!imageFile) {
+      setAnalyzing(false)
+      return
+    }
+
+    try {
+      const result = await runAnalysis({
+        image: imageFile,
+        reportText: mode === 'xray_report' ? reportText : undefined,
+      })
+      setSession({
+        analyzed: true,
+        analysisResult: result,
+        analysisError: null,
+        imagePreviewUrl: previewUrl,
+      })
       setAnalyzing(false)
       navigate('report')
-    }, 2400)
+    } catch (err) {
+      setAnalyzing(false)
+      const message = err instanceof Error ? err.message : 'Analysis failed. Please try again.'
+      setErrorMessage(message)
+      setSession({ analysisError: message })
+    }
   }
 
   // The X-ray upload / preview block, reused for modes A & B and as the
@@ -265,13 +315,17 @@ export function InputScreen() {
         type="file"
         accept="image/png,image/jpeg"
         className="sr-only"
-        onChange={startUpload}
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) handleFile(file)
+          e.target.value = ''
+        }}
       />
 
       {phase === 'idle' && (
         <button
           type="button"
-          onClick={startUpload}
+          onClick={() => fileInputRef.current?.click()}
           onDragOver={(e) => {
             e.preventDefault()
             setDragging(true)
@@ -280,7 +334,8 @@ export function InputScreen() {
           onDrop={(e) => {
             e.preventDefault()
             setDragging(false)
-            startUpload()
+            const file = e.dataTransfer.files?.[0]
+            if (file) handleFile(file)
           }}
           className={cn(
             'group flex w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-16 text-center transition-all duration-300',
@@ -316,7 +371,7 @@ export function InputScreen() {
             <Loader2 className="size-8 animate-spin" />
           </div>
           <p className="mt-5 text-sm font-semibold text-foreground">
-            Uploading chest-xray.png
+            Uploading {imageFile?.name ?? 'image'}
           </p>
           <div className="mt-3 h-2 w-full max-w-xs overflow-hidden rounded-full bg-muted">
             <div
@@ -338,7 +393,7 @@ export function InputScreen() {
             )}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/chest-xray.png"
+              src={previewUrl ?? '/chest-xray.png'}
               alt="Uploaded chest X-ray preview"
               className="size-full object-cover"
             />
@@ -355,19 +410,16 @@ export function InputScreen() {
           <CardContent className="flex items-center gap-3 p-4">
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-foreground">
-                chest-xray.png
+                {imageFile?.name ?? 'chest-xray.png'}
               </p>
               <p className="text-xs text-muted-foreground">
-                2.4 MB · Uploaded successfully
+                {imageFile ? `${(imageFile.size / (1024 * 1024)).toFixed(1)} MB · Ready` : 'Ready'}
               </p>
             </div>
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => {
-                setPhase('idle')
-                setProgress(0)
-              }}
+              onClick={removeImage}
               disabled={analyzing}
               aria-label="Remove image"
             >
@@ -598,6 +650,11 @@ export function InputScreen() {
           {symptomsField}
 
           <div className="sticky bottom-20 lg:bottom-6">
+            {errorMessage && (
+              <div className="mb-3 rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-400">
+                {errorMessage}
+              </div>
+            )}
             <Button
               className="h-13 w-full py-3.5 text-base shadow-[0_8px_30px_-8px_var(--color-primary)]"
               disabled={!canAnalyze || analyzing}
