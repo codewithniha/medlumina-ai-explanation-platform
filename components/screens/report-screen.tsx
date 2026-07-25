@@ -31,6 +31,7 @@ import {
   mockMedicines,
   mockInferredCondition,
 } from '@/lib/mock-data'
+import { mapAnalysisToReport } from '@/lib/report-mapper'
 import { cn } from '@/lib/utils'
 
 function StatCard({
@@ -265,7 +266,9 @@ export function ReportScreen() {
     return <PrescriptionInsight />
   }
 
-  const report = mockReport
+  // Falls back to mock data if analysis hasn't actually run yet (e.g. the
+  // patient navigated here directly) so this screen never crashes.
+  const report = session.analysisResult ? mapAnalysisToReport(session.analysisResult) : mockReport
   const isReportMode = mode === 'xray_report'
 
   return (
