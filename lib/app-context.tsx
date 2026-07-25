@@ -8,6 +8,7 @@ import {
   useMemo,
   type ReactNode,
 } from 'react'
+import type { AnalysisResult } from './analysis-types'
 
 export type ScreenId =
   | 'landing'
@@ -38,6 +39,11 @@ export type SessionData = {
   symptoms: string
   hasImage: boolean
   analyzed: boolean
+  // Real upload/analysis state (xray_report + xray_only modes only —
+  // prescription_only has no backend wired up yet, see input-screen.tsx).
+  imagePreviewUrl: string | null
+  analysisResult: AnalysisResult | null
+  analysisError: string | null
 }
 
 const emptySession: SessionData = {
@@ -47,6 +53,9 @@ const emptySession: SessionData = {
   symptoms: '',
   hasImage: false,
   analyzed: false,
+  imagePreviewUrl: null,
+  analysisResult: null,
+  analysisError: null,
 }
 
 type AppContextValue = {
@@ -91,7 +100,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setInputMode = useCallback((mode: InputMode) => {
     setSessionState((prev) => {
       if (prev.inputMode === mode) return prev
-      return { ...prev, inputMode: mode, analyzed: false }
+      return {
+        ...prev,
+        inputMode: mode,
+        analyzed: false,
+        analysisResult: null,
+        analysisError: null,
+      }
     })
     setVisited((prev) => {
       const next = new Set<ScreenId>()
