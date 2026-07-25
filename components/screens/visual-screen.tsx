@@ -23,6 +23,7 @@ import { Badge } from '@/components/ui/badge'
 import { PageHeader } from './page-header'
 import { useApp } from '@/lib/app-context'
 import { mockReport } from '@/lib/mock-data'
+import { mapAnalysisToReport } from '@/lib/report-mapper'
 import { cn } from '@/lib/utils'
 
 function Heatmap({ opacity, intensity }: { opacity: number; intensity: number }) {
@@ -108,7 +109,14 @@ function ControlSlider({
 }
 
 export function VisualScreen() {
-  const { navigate, stepEyebrow } = useApp()
+  const { navigate, stepEyebrow, session } = useApp()
+  const analysisResult = session.analysisResult
+  const hasReal = !!analysisResult
+  const originalSrc = session.imagePreviewUrl ?? '/chest-xray.png'
+  const annotatedSrc = analysisResult?.annotated_image_base64 ?? null
+  const comparisonSrc = analysisResult?.comparison_image_base64 ?? null
+  const realCaption = analysisResult ? mapAnalysisToReport(analysisResult).visualCaption : null
+
   const [showOverlay, setShowOverlay] = useState(true)
   const [showAnnotation, setShowAnnotation] = useState(true)
   const [compareMode, setCompareMode] = useState(false)
@@ -181,66 +189,83 @@ export function VisualScreen() {
                 ref={viewerRef}
                 className={cn(
                   'relative aspect-square w-full select-none overflow-hidden',
-                  zoom > 1 && !compareMode
+                  zoom > 1 && !(compareMode && !hasReal)
                     ? 'cursor-grab active:cursor-grabbing'
-                    : compareMode
+                    : compareMode && !hasReal
                       ? 'cursor-ew-resize'
                       : 'cursor-default',
                   fullscreen && 'h-dvh',
                 )}
                 onMouseDown={(e) => {
-                  if (compareMode) handleSliderMove(e.clientX)
-                  else startPan(e.clientX, e.clientY)
+                  if (compareMode && !hasReal) handleSliderMove(e.clientX)
+                  else if (!hasReal || zoom > 1) startPan(e.clientX, e.clientY)
                 }}
                 onMouseMove={(e) => {
-                  if (compareMode && e.buttons === 1) handleSliderMove(e.clientX)
+                  if (compareMode && !hasReal && e.buttons === 1) handleSliderMove(e.clientX)
                   else if (e.buttons === 1) movePan(e.clientX, e.clientY)
                 }}
                 onMouseUp={() => (dragState.current = null)}
                 onMouseLeave={() => (dragState.current = null)}
                 onTouchMove={(e) => {
-                  if (compareMode) handleSliderMove(e.touches[0].clientX)
+                  if (compareMode && !hasReal) handleSliderMove(e.touches[0].clientX)
                 }}
               >
                 <div
                   className="absolute inset-0 transition-transform duration-100"
                   style={{
-                    transform: compareMode
-                      ? undefined
-                      : `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                    transform:
+                      compareMode && !hasReal
+                        ? undefined
+                        : `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
                   }}
                 >
-                  {/* Base image */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src="/chest-xray.png"
-                    alt="Original chest X-ray"
-                    className="absolute inset-0 size-full object-cover"
-                    draggable={false}
-                  />
-
-                  {compareMode ? (
-                    <div
-                      className="absolute inset-0 overflow-hidden"
-                      style={{ clipPath: `inset(0 0 0 ${sliderPos}%)` }}
-                    >
+                  {hasReal ? (
+                    // Real backend output: Module 5 already bakes the circles,
+                    // arrows, and labels into the image, and the "comparison"
+                    // image is already a stitched original|annotated composite —
+                    // so there's nothing to overlay or slide, just which image
+                    // to show. object-contain (not cover) so the label margin
+                    // on the right of the annotated image never gets cropped.
+                    <img
+                      src={(compareMode ? comparisonSrc : annotatedSrc) ?? originalSrc}
+                      alt={compareMode ? 'Original and annotated X-ray side by side' : 'Annotated chest X-ray'}
+                      className="absolute inset-0 size-full object-contain"
+                      draggable={false}
+                    />
+                  ) : (
+                    <>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src="/chest-xray.png"
-                        alt="Annotated chest X-ray with highlighted region"
+                        alt="Original chest X-ray"
                         className="absolute inset-0 size-full object-cover"
                         draggable={false}
                       />
-                      {showOverlay && (
-                        <Heatmap opacity={opacity} intensity={intensity} />
+
+                      {compareMode ? (
+                        <div
+                          className="absolute inset-0 overflow-hidden"
+                          style={{ clipPath: `inset(0 0 0 ${sliderPos}%)` }}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src="/chest-xray.png"
+                            alt="Annotated chest X-ray with highlighted region"
+                            className="absolute inset-0 size-full object-cover"
+                            draggable={false}
+                          />
+                          {showOverlay && (
+                            <Heatmap opacity={opacity} intensity={intensity} />
+                          )}
+                        </div>
+                      ) : (
+                        <>
+                          {showOverlay && (
+                            <Heatmap opacity={opacity} intensity={intensity} />
+                          )}
+                          {showAnnotation && <Annotation />}
+                        </>
                       )}
-                    </div>
-                  ) : (
-                    <>
-                      {showOverlay && (
-                        <Heatmap opacity={opacity} intensity={intensity} />
-                      )}
-                      {showAnnotation && <Annotation />}
                     </>
                   )}
                 </div>
@@ -250,16 +275,18 @@ export function VisualScreen() {
                   variant="secondary"
                   className="absolute left-3 top-3 bg-black/50 text-white backdrop-blur"
                 >
-                  {compareMode ? 'Original' : 'X-ray view'}
+                  {hasReal ? (compareMode ? 'Original + Annotated' : 'Annotated by the model') : compareMode ? 'Original' : 'X-ray view'}
                 </Badge>
-                {compareMode && (
+                {compareMode && !hasReal && (
                   <Badge className="absolute right-3 top-3 bg-red-500/80 text-white">
                     AI Highlighted
                   </Badge>
                 )}
 
-                {/* Compare slider handle */}
-                {compareMode && (
+                {/* Compare slider handle — only meaningful for the mock demo's
+                    drag-between-two-layers interaction; real data just swaps
+                    which whole image is shown (see badge above). */}
+                {compareMode && !hasReal && (
                   <div
                     className="pointer-events-none absolute inset-y-0 w-0.5 bg-white/90"
                     style={{ left: `${sliderPos}%` }}
@@ -275,7 +302,7 @@ export function VisualScreen() {
                   <IconBtn
                     label="Zoom out"
                     onClick={() => setZoom((z) => Math.max(1, +(z - 0.5).toFixed(1)))}
-                    disabled={compareMode || zoom <= 1}
+                    disabled={(compareMode && !hasReal) || zoom <= 1}
                   >
                     <ZoomOut className="size-4" />
                   </IconBtn>
@@ -285,12 +312,12 @@ export function VisualScreen() {
                   <IconBtn
                     label="Zoom in"
                     onClick={() => setZoom((z) => Math.min(4, +(z + 0.5).toFixed(1)))}
-                    disabled={compareMode || zoom >= 4}
+                    disabled={(compareMode && !hasReal) || zoom >= 4}
                   >
                     <ZoomIn className="size-4" />
                   </IconBtn>
                   <span className="mx-0.5 h-5 w-px bg-white/20" />
-                  <IconBtn label="Reset view" onClick={resetView} disabled={compareMode}>
+                  <IconBtn label="Reset view" onClick={resetView} disabled={compareMode && !hasReal}>
                     <RotateCcw className="size-4" />
                   </IconBtn>
                   <IconBtn label="Fullscreen" onClick={toggleFullscreen}>
@@ -308,13 +335,22 @@ export function VisualScreen() {
           {/* Legend */}
           <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-border bg-card/60 px-4 py-3">
             <span className="text-xs font-semibold text-foreground">Legend</span>
-            <LegendDot className="bg-red-500/80" label="High attention" />
-            <LegendDot className="bg-orange-400/80" label="Moderate" />
-            <LegendDot className="bg-yellow-300/80" label="Low / edge" />
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <MapPin className="size-3.5 text-red-400" />
-              Annotated finding
-            </span>
+            {hasReal ? (
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <MapPin className="size-3.5 text-red-400" />
+                Each circled region is one finding — color and label distinguish findings when more than one is shown.
+              </span>
+            ) : (
+              <>
+                <LegendDot className="bg-red-500/80" label="High attention" />
+                <LegendDot className="bg-orange-400/80" label="Moderate" />
+                <LegendDot className="bg-yellow-300/80" label="Low / edge" />
+                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <MapPin className="size-3.5 text-red-400" />
+                  Annotated finding
+                </span>
+              </>
+            )}
           </div>
         </div>
 
@@ -329,43 +365,53 @@ export function VisualScreen() {
 
               <ToggleRow
                 icon={compareMode ? Layers : Eye}
-                label="Comparison slider"
+                label={hasReal ? 'Side-by-side comparison' : 'Comparison slider'}
                 checked={compareMode}
                 onChange={(v) => {
                   setCompareMode(v)
                   resetView()
                 }}
               />
-              <ToggleRow
-                icon={showOverlay ? Eye : EyeOff}
-                label="Highlighted region"
-                checked={showOverlay}
-                onChange={setShowOverlay}
-              />
-              <ToggleRow
-                icon={MapPin}
-                label="Annotation marker"
-                checked={showAnnotation}
-                onChange={setShowAnnotation}
-                disabled={compareMode}
-              />
+              {!hasReal && (
+                <>
+                  <ToggleRow
+                    icon={showOverlay ? Eye : EyeOff}
+                    label="Highlighted region"
+                    checked={showOverlay}
+                    onChange={setShowOverlay}
+                  />
+                  <ToggleRow
+                    icon={MapPin}
+                    label="Annotation marker"
+                    checked={showAnnotation}
+                    onChange={setShowAnnotation}
+                    disabled={compareMode}
+                  />
 
-              <div className="h-px bg-border" />
+                  <div className="h-px bg-border" />
 
-              <ControlSlider
-                icon={Eye}
-                label="Overlay opacity"
-                value={opacity}
-                onChange={setOpacity}
-                disabled={!showOverlay}
-              />
-              <ControlSlider
-                icon={Layers}
-                label="Heatmap intensity"
-                value={intensity}
-                onChange={setIntensity}
-                disabled={!showOverlay}
-              />
+                  <ControlSlider
+                    icon={Eye}
+                    label="Overlay opacity"
+                    value={opacity}
+                    onChange={setOpacity}
+                    disabled={!showOverlay}
+                  />
+                  <ControlSlider
+                    icon={Layers}
+                    label="Heatmap intensity"
+                    value={intensity}
+                    onChange={setIntensity}
+                    disabled={!showOverlay}
+                  />
+                </>
+              )}
+              {hasReal && (
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Circles, arrows, and labels are drawn directly onto the image by the model — there&apos;s
+                  nothing to toggle here beyond zoom and side-by-side.
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -378,7 +424,7 @@ export function VisualScreen() {
                   What the highlight means
                 </p>
                 <p className="mt-1 text-sm leading-relaxed text-foreground/90 text-pretty">
-                  {mockReport.visualCaption}
+                  {realCaption ?? mockReport.visualCaption}
                 </p>
               </div>
             </CardContent>
