@@ -37,6 +37,8 @@ pair), and explicitly marking anywhere they genuinely disagree as
 """
 
 import base64
+import random
+import time
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
@@ -44,6 +46,69 @@ from langchain_core.messages import HumanMessage
 from llm_client import GEMINI_API_KEY
 
 _ocr_model = None
+
+# ── Rate-limit handling (added after a real, confirmed gap: this pipeline
+# can make up to 4 Gemini calls per report -- 3 transcription attempts +
+# 1 reconciliation -- and up to 4x that again for a multi-page scanned
+# PDF, but was never actually run against the free-tier quota (commonly
+# ~15 requests/minute for this model) to see what happens when it's hit.
+# Two layers, doing two different jobs:
+#
+#   1. _throttle() enforces a minimum GAP between consecutive calls FROM
+#      THIS PROCESS, so a single report upload's own burst of calls
+#      rarely trips the limit in the first place. This is the cheap,
+#      first line of defense.
+#   2. _invoke_with_retry() catches it anyway (another process, or
+#      Module 6 sharing the same GEMINI_API_KEY, can cause a 429 the
+#      throttle above can't see coming) and retries with exponential
+#      backoff, rather than treating a transient rate-limit the same as
+#      a real, permanent failure.
+# ──────────────────────────────────────────────────────────────────────
+
+_MIN_SECONDS_BETWEEN_CALLS = 4.0  # ~15 req/min paced evenly
+_last_call_at = 0.0
+
+
+def _throttle() -> None:
+    global _last_call_at
+    elapsed = time.monotonic() - _last_call_at
+    wait = _MIN_SECONDS_BETWEEN_CALLS - elapsed
+    if wait > 0:
+        time.sleep(wait)
+    _last_call_at = time.monotonic()
+
+
+def _is_rate_limit_error(err: Exception) -> bool:
+    """Different langchain/google-genai library versions surface a 429 as
+    different exception types -- checking the class name and string form
+    together, rather than relying on one specific exception class, so a
+    version mismatch doesn't silently turn this into a no-op (a real
+    rate-limit wrongly treated as permanent would fail the whole request
+    when it should have just waited and retried)."""
+    text = f"{type(err).__name__} {err}".lower()
+    return any(marker in text for marker in ("429", "resourceexhausted", "rate limit", "quota"))
+
+
+def _invoke_with_retry(model, messages, max_retries: int = 4):
+    """model.invoke() wrapped with throttling + exponential backoff,
+    specifically for rate-limit errors only. A non-rate-limit error (bad
+    key, real connection failure, etc.) is re-raised immediately --
+    retrying those would just delay an inevitable failure, and the
+    caller's existing "at least 2 of 3 attempts succeeded" degradation
+    (see transcribe_handwritten_report) already handles a genuine
+    transient failure without this retry layer's help."""
+    last_err: Exception | None = None
+    for attempt in range(max_retries):
+        _throttle()
+        try:
+            return model.invoke(messages)
+        except Exception as e:
+            if not _is_rate_limit_error(e) or attempt == max_retries - 1:
+                raise
+            last_err = e
+            backoff = (2**attempt) + random.uniform(0, 1)
+            time.sleep(backoff)
+    raise last_err  # unreachable -- loop above always returns or raises
 
 TRANSCRIPTION_PROMPT = """You are transcribing a doctor's handwritten medical report from a photo. Doctors' handwriting is often messy -- do your best, but accuracy matters more than completeness here, since this text will be used to answer a patient's real medical questions.
 
@@ -96,7 +161,7 @@ def _run_single_transcription(image_bytes: bytes, mime_type: str) -> str:
         ]
     )
     model = _get_ocr_model()
-    response = model.invoke([message])
+    response = _invoke_with_retry(model, [message])
     text = (response.content or "").strip()
     return "" if text == "NO_TEXT_FOUND" else text
 
@@ -113,7 +178,7 @@ def _reconcile(attempts: list[str]) -> str:
         f"--- ATTEMPT {i + 1} ---\n{a}" for i, a in enumerate(attempts)
     )
     prompt = RECONCILIATION_PROMPT_TEMPLATE.format(attempts_block=attempts_block)
-    response = model.invoke([HumanMessage(content=prompt)])
+    response = _invoke_with_retry(model, [HumanMessage(content=prompt)])
     return (response.content or "").strip()
 
 
@@ -221,3 +286,103 @@ def transcribe_report_from_pdf(pdf_bytes: bytes, max_pages: int = 5) -> str:
     if not page_texts:
         return ""
     return "\n\n".join(page_texts)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# OFFLINE VERIFICATION — no network needed, mirrors the pattern in
+# llm_client.py's _offline_verification(). This tests the RETRY/BACKOFF
+# LOGIC ITSELF against a fake model that simulates real 429 errors -- it
+# does NOT confirm behaviour against the real Gemini API (that needs a
+# live GEMINI_API_KEY and real quota pressure, which this can't fake).
+# Treat this as "the recovery logic is correct" verified, not "confirmed
+# against live rate-limiting" -- those are different claims.
+# Run with: python ocr.py
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _offline_verification() -> bool:
+    passed = 0
+    failed = 0
+
+    def check(label, condition):
+        nonlocal passed, failed
+        status = "PASS" if condition else "FAIL"
+        print(f"  [{status}] {label}")
+        if condition:
+            passed += 1
+        else:
+            failed += 1
+
+    class _FakeRateLimitError(Exception):
+        pass
+
+    class _FakePermanentError(Exception):
+        pass
+
+    class _FakeResponse:
+        def __init__(self, content):
+            self.content = content
+
+    class _FlakyModel:
+        """Fails with a simulated 429 the first N calls, then succeeds --
+        proves the retry loop actually recovers, without touching the
+        real Gemini API."""
+
+        def __init__(self, fail_times, error_cls=_FakeRateLimitError):
+            self.fail_times = fail_times
+            self.error_cls = error_cls
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+            if self.calls <= self.fail_times:
+                if self.error_cls is _FakeRateLimitError:
+                    raise self.error_cls("429 Resource has been exhausted (e.g. check quota).")
+                raise self.error_cls("Invalid argument: malformed request.")
+            return _FakeResponse("ok")
+
+    # Speed the test up -- don't actually wait through real backoff delays.
+    real_sleep = time.sleep
+    time.sleep = lambda _seconds: None
+
+    try:
+        print("\n[TEST 1] Recovers after 2 simulated rate-limit errors, then succeeds")
+        model = _FlakyModel(fail_times=2)
+        result = _invoke_with_retry(model, ["prompt"])
+        check("eventually succeeded", result.content == "ok")
+        check("took exactly 3 calls (2 failures + 1 success)", model.calls == 3)
+
+        print("\n[TEST 2] Gives up after max_retries consecutive rate-limit errors")
+        model2 = _FlakyModel(fail_times=99)  # always fails
+        try:
+            _invoke_with_retry(model2, ["prompt"], max_retries=4)
+            check("raised after exhausting retries", False)
+        except _FakeRateLimitError:
+            check("raised after exhausting retries", True)
+        check("made exactly max_retries attempts, not more", model2.calls == 4)
+
+        print("\n[TEST 3] A non-rate-limit error is NOT retried -- fails immediately")
+        model3 = _FlakyModel(fail_times=99, error_cls=_FakePermanentError)
+        try:
+            _invoke_with_retry(model3, ["prompt"], max_retries=4)
+            check("raised the permanent error", False)
+        except _FakePermanentError:
+            check("raised the permanent error", True)
+        check("did NOT burn through retries on a non-rate-limit error", model3.calls == 1)
+
+        print("\n[TEST 4] _is_rate_limit_error recognizes real-world error shapes")
+        check("plain '429' in message", _is_rate_limit_error(Exception("429 Too Many Requests")))
+        check("'ResourceExhausted' class name", _is_rate_limit_error(type("ResourceExhausted", (Exception,), {})()))
+        check("'quota' in message", _is_rate_limit_error(Exception("You exceeded your current quota")))
+        check("unrelated error is NOT flagged as rate-limit", not _is_rate_limit_error(ValueError("bad input")))
+    finally:
+        time.sleep = real_sleep
+
+    print("\n" + "=" * 60)
+    print(f"{passed}/{passed + failed} offline verification tests passed.")
+    print("=" * 60)
+    return failed == 0
+
+
+if __name__ == "__main__":
+    _offline_verification()

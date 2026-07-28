@@ -169,7 +169,19 @@ export type TranscribeReportResult = {
 
 // Sends a photo of a doctor's handwritten report for transcription. Uses
 // FormData (multipart upload), not JSON -- this is a real file, not text.
+// Matches the limit enforced server-side in module4_api.py's
+// /report/transcribe endpoint -- checked here too so a patient gets an
+// instant, clear rejection instead of waiting through an upload just to
+// have the server reject it after the fact.
+const MAX_REPORT_FILE_BYTES = 20 * 1024 * 1024 // 20MB
+
 export async function transcribeReport(image: File): Promise<TranscribeReportResult> {
+  if (image.size > MAX_REPORT_FILE_BYTES) {
+    throw new ApiError(
+      `This file is ${(image.size / (1024 * 1024)).toFixed(1)}MB, which is over the 20MB limit. Please use a smaller photo or a compressed PDF.`,
+    )
+  }
+
   const formData = new FormData()
   formData.append('image', image)
 

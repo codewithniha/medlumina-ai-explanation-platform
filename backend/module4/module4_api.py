@@ -36,6 +36,8 @@ from session_store import (
 from session_indexer import index_session_data
 from module4_pipeline import answer_question
 
+MAX_REPORT_FILE_BYTES = 20 * 1024 * 1024  # 20MB -- matches lib/api-client.ts
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -163,6 +165,19 @@ async def transcribe_report(image: UploadFile = File(...)):
     file_bytes = await image.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    # The frontend already blocks files over this size before they're even
+    # uploaded (see MAX_REPORT_FILE_BYTES in lib/api-client.ts), but that
+    # check can be bypassed by anyone calling this endpoint directly --
+    # this is the real enforcement point. Also protects the OCR pipeline
+    # itself: a huge scanned PDF means proportionally more Gemini calls
+    # (see ocr.py's rate-limit handling), so keeping the input bounded
+    # here keeps that bounded too.
+    if len(file_bytes) > MAX_REPORT_FILE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File is {len(file_bytes) / (1024 * 1024):.1f}MB, which is over the {MAX_REPORT_FILE_BYTES // (1024 * 1024)}MB limit.",
+        )
 
     try:
         if is_pdf:

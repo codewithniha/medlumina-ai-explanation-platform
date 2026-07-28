@@ -23,6 +23,17 @@ const PILLOW_SAFE_TYPES = new Set([
   'image/bmp',
 ])
 
+// The UI has always SAID "up to 20MB" but nothing ever actually checked
+// it -- a patient could pick a 200MB HEIC and heic2any's WASM decoder
+// would sit there grinding on it (or freeze the tab) before failing
+// badly, instead of a fast, clear rejection up front. Checked first,
+// before any conversion work, for exactly that reason.
+const MAX_XRAY_FILE_BYTES = 20 * 1024 * 1024 // 20MB, matches the UI copy
+
+function formatMB(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+}
+
 function isHeic(file: File): boolean {
   const type = file.type.toLowerCase()
   if (type === 'image/heic' || type === 'image/heif') return true
@@ -50,6 +61,12 @@ function isHeic(file: File): boolean {
  *   fail there with a far less clear error
  */
 export async function normalizeXrayFile(file: File): Promise<File> {
+  if (file.size > MAX_XRAY_FILE_BYTES) {
+    throw new Error(
+      `This file is ${formatMB(file.size)}, which is over the 20MB limit. Please use a smaller photo or a compressed PDF.`,
+    )
+  }
+
   if (file.type === 'application/pdf') {
     return renderPdfFirstPageAsImage(file)
   }
