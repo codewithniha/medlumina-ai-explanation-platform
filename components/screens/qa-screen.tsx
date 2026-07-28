@@ -109,6 +109,16 @@ function MessageBubble({
                 General medical information
               </span>
             )}
+            {message.confidence == null &&
+              message.classification === 'SESSION_GROUNDED' &&
+              message.insufficientSessionData && (
+                <span
+                  className="rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px] font-semibold text-slate-400"
+                  title="Not enough information has been entered yet (e.g. just one medicine) for a meaningful confidence comparison. Add more details -- symptoms, additional medicines, or a report -- for a real confidence score."
+                >
+                  Not enough data yet for a score
+                </span>
+              )}
             <span className="text-[10px] text-muted-foreground">
               AI-generated -- can make mistakes
             </span>
@@ -460,11 +470,12 @@ export function QAScreen() {
     reply: string,
     confidence: number | null = null,
     classification: QAMessage['classification'] = null,
+    insufficientSessionData: boolean = false,
   ) {
     const id = `a-${Date.now()}`
     setMessages((prev) => [
       ...prev,
-      { id, role: 'ai', text: '', confidence, classification },
+      { id, role: 'ai', text: '', confidence, classification, insufficientSessionData },
     ])
     setStreamingId(id)
     const words = reply.split(' ')
@@ -505,7 +516,12 @@ export function QAScreen() {
     askQuestion(session.sessionId, trimmed)
       .then((result) => {
         setTyping(false)
-        streamReply(result.answer, result.confidence, result.classification)
+        streamReply(
+          result.answer,
+          result.confidence,
+          result.classification,
+          result.insufficient_session_data,
+        )
       })
       .catch((err: unknown) => {
         setTyping(false)

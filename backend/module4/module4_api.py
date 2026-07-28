@@ -118,6 +118,13 @@ class AskResponse(BaseModel):
     retrieved_session_chunks: list[str] = []
     retrieved_kb_chunks: list[str] = []
     confidence: float | None = None
+    # True when this was a SESSION_GROUNDED answer but the session simply
+    # doesn't have enough indexed data yet (0 or 1 chunks -- e.g. only one
+    # medicine entered, no symptoms/report/findings) for a real relative
+    # confidence comparison. Lets the frontend show an honest explanation
+    # instead of a confidence badge silently going missing -- see
+    # retriever.py's _hybrid_search docstring for the full reasoning.
+    insufficient_session_data: bool = False
 
 
 class SessionHistoryRequest(BaseModel):
@@ -311,6 +318,7 @@ def ask(req: AskRequest):
         retrieved_session_chunks=result.get("retrieved_session_chunks", []),
         retrieved_kb_chunks=result.get("retrieved_kb_chunks", []),
         confidence=result.get("confidence"),
+        insufficient_session_data=result.get("insufficient_session_data", False),
     )
 
 

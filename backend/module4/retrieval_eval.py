@@ -112,10 +112,10 @@ def run_evaluation(top_k: int = 4):
             prescribed_medicines=case["medicines"],
         )
         debug_this_case = case["expect_keyword"] == "emphysema"
-        results = retrieve_session_context(
+        chunks, confidence, insufficient_data = retrieve_session_context(
             session_id, case["question"], top_k=top_k, debug=debug_this_case
         )
-        top_result = results[0].lower() if results else ""
+        top_result = chunks[0].lower() if chunks else ""
         hit = case["expect_keyword"] in top_result
         correct += hit
         mark = "YES" if hit else "NO"

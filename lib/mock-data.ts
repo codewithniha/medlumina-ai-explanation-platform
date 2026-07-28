@@ -161,6 +161,10 @@ export type QAMessage = {
   text: string
   confidence?: number | null
   classification?: 'SESSION_GROUNDED' | 'GENERAL_MEDICAL' | 'OFF_TOPIC' | null
+  // True when this was a session-grounded answer but the session simply
+  // doesn't have enough indexed data yet (e.g. only one medicine entered)
+  // for a real confidence comparison -- see qa-screen.tsx's badge logic.
+  insufficientSessionData?: boolean
 }
 
 export const initialQA: QAMessage[] = [

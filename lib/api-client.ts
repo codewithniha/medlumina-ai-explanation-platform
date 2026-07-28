@@ -61,6 +61,7 @@ export type AskQuestionResult = {
   classification: 'SESSION_GROUNDED' | 'GENERAL_MEDICAL' | 'OFF_TOPIC' | null
   answer: string
   confidence: number | null
+  insufficient_session_data: boolean
 }
 
 export type PatientSessionSummary = {

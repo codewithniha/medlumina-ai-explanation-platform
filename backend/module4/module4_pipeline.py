@@ -55,6 +55,7 @@ def answer_question(session_id: str, question: str) -> dict:
             "classification": None,
             "answer": "This session doesn't exist. Please start a new session by uploading a report first.",
             "confidence": None,
+            "insufficient_session_data": False,
         }
 
     classification = classify_question(question, session_id=session_id)
@@ -62,7 +63,12 @@ def answer_question(session_id: str, question: str) -> dict:
     if classification == OFF_TOPIC:
         answer = DECLINE_MESSAGE_URDU if _is_urdu(question) else DECLINE_MESSAGE
         log_turn(session_id, question, classification, answer)
-        return {"classification": classification, "answer": answer, "confidence": None}
+        return {
+            "classification": classification,
+            "answer": answer,
+            "confidence": None,
+            "insufficient_session_data": False,
+        }
 
     if classification == GENERAL_MEDICAL:
         answer = generate_general_medical_answer(session_id=session_id, question=question)
@@ -70,7 +76,11 @@ def answer_question(session_id: str, question: str) -> dict:
         # to score a confidence against (see generator.py's docstring on
         # why patient data is deliberately excluded here). None, not 0 --
         # same "None means no real signal, not zero" convention used
-        # throughout this project.
+        # throughout this project. insufficient_session_data is False here
+        # too -- that flag specifically means "retrieval ran but had too
+        # little to compare", which doesn't apply when retrieval never ran
+        # at all (the frontend already shows a different, correct message
+        # for GENERAL_MEDICAL via the classification field itself).
         confidence = None
         log_turn(session_id, question, classification, answer, confidence=confidence)
         return {
@@ -79,6 +89,7 @@ def answer_question(session_id: str, question: str) -> dict:
             "retrieved_session_chunks": [],
             "retrieved_kb_chunks": [],
             "confidence": confidence,
+            "insufficient_session_data": False,
         }
 
     # classification == SESSION_GROUNDED
@@ -96,7 +107,11 @@ def answer_question(session_id: str, question: str) -> dict:
     # confidence number attached to the "I couldn't reach the service"
     # fallback message, which is genuinely misleading -- a percentage next
     # to a system error, not an answer. Suppress it in that specific case.
-    confidence = None if _failed(answer) else retrieval["confidence"]
+    failed = _failed(answer)
+    confidence = None if failed else retrieval["confidence"]
+    # Only meaningful to show "not enough data yet" when generation itself
+    # actually succeeded -- a failed answer already has its own explanation.
+    insufficient_session_data = retrieval["insufficient_session_data"] and not failed
 
     log_turn(session_id, question, classification, answer, confidence=confidence)
     return {
@@ -105,4 +120,5 @@ def answer_question(session_id: str, question: str) -> dict:
         "retrieved_session_chunks": retrieval["session_chunks"],
         "retrieved_kb_chunks": retrieval["kb_chunks"],
         "confidence": confidence,
+        "insufficient_session_data": insufficient_session_data,
     }

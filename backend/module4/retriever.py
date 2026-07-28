@@ -106,21 +106,42 @@ def _hybrid_search(
     rerank: bool = True,
     debug: bool = False,
     alpha: float = 0.3,
-) -> tuple[list[str], float | None]:
+) -> tuple[list[str], float | None, bool]:
     """
     Runs vector + BM25 search over the given collection's full document
     set, fuses with RRF, optionally reranks the top candidates with the
-    cross-encoder, and returns (top_k document TEXTS, confidence).
+    cross-encoder, and returns (top_k document TEXTS, confidence,
+    insufficient_session_data).
 
     confidence is derived from the TOP reranked chunk's BLENDED score
     (cross-encoder + RRF agreement, see the calculation near the bottom of
     this function for why) -- None if nothing was retrieved at all, or if
     reranking didn't run (see the two early-return paths below, where
-    there's no blended score to base a real number on). None here is
-    unambiguous: "no real confidence signal available" -- callers and the
-    frontend can treat `confidence is None` as "don't show a badge" with
-    a single check, no extra state needed to tell it apart from a
-    genuinely-computed low score.
+    there's no blended score to base a real number on).
+
+    insufficient_session_data is True specifically when confidence is None
+    BECAUSE the session has 0 or 1 total chunks indexed -- e.g. a
+    Prescription-only session where the patient entered just one medicine
+    and no symptoms. This is a REAL, honest gap in the confidence
+    methodology, not a bug to silently hide: the confidence score is
+    fundamentally a RELATIVE measure (the top candidate's score, min-max
+    normalized against the OTHER candidates that were compared against
+    it -- see the blend calculation below). With only one chunk in the
+    whole session, there is nothing to compare it against, so there is no
+    honest way to produce a real relative confidence number.
+    Deliberately NOT attempting a same-shaped workaround here (e.g.
+    scoring the single chunk against a fixed reference range) -- the
+    cross-encoder's raw logits for this domain are documented elsewhere in
+    this file (see the comment above the confidence calculation) to
+    cluster tightly around -10 to -11 even for CONFIRMED CORRECT matches,
+    meaning any single-chunk calibration invented under time pressure,
+    without real evaluation data to anchor it, risks producing a number
+    that LOOKS like a real signal but isn't -- worse than honestly showing
+    none at all. Callers (module4_pipeline.py, the API response, and
+    ultimately qa-screen.tsx) use this flag to show the patient a clear
+    explanation ("not enough data yet for a confidence score") instead of
+    a badge silently going missing, which looks like an omission/bug
+    rather than an explained, honest limitation.
 
     all_ids/all_docs must be pre-fetched from the collection by the caller
     (session collections are small -- a handful to a few dozen chunks --
@@ -143,7 +164,7 @@ def _hybrid_search(
     was wrong.
     """
     if not all_docs:
-        return [], None
+        return [], None, True
 
     id_to_doc = dict(zip(all_ids, all_docs))
 
@@ -177,15 +198,20 @@ def _hybrid_search(
 
     if not rerank or len(candidate_ids) <= 1:
         # No cross-encoder ran, so there's no real relevance-logit signal
-        # to base a confidence number on.
-        return [id_to_doc[i] for i in candidate_ids[:top_k] if i in id_to_doc], None
+        # to base a confidence number on. len(candidate_ids) <= 1 is the
+        # live-triggered case (rerank=False is never actually passed by
+        # any current caller, kept only as a defensive parameter) -- see
+        # the docstring above for why this specifically means "not enough
+        # session data", not "genuinely no match".
+        insufficient = len(candidate_ids) <= 1
+        return [id_to_doc[i] for i in candidate_ids[:top_k] if i in id_to_doc], None, insufficient
 
     # --- Cross-encoder rerank on the shortlist only ---
     reranker = _get_reranker()
     pairs = [(question, id_to_doc[i]) for i in candidate_ids if i in id_to_doc]
     valid_ids = [i for i in candidate_ids if i in id_to_doc]
     if not pairs:
-        return [], None
+        return [], None, True
     ce_scores = list(reranker.predict(pairs))
 
     # Blend: normalize both score types to [0,1], then combine so a strong
@@ -237,22 +263,23 @@ def _hybrid_search(
     confidence = round(reranked[0][3] * 100, 1)
     confidence = min(confidence, 97.0)
 
-    return [id_to_doc[i] for i, _, _, _ in reranked[:top_k]], confidence
+    return [id_to_doc[i] for i, _, _, _ in reranked[:top_k]], confidence, False
 
 
 def retrieve_session_context(
     session_id: str, question: str, top_k: int = 4, debug: bool = False
-) -> tuple[list[str], float | None]:
+) -> tuple[list[str], float | None, bool]:
     """Retrieves the most relevant chunks from THIS patient's session collection,
     using hybrid (vector + BM25) search with cross-encoder reranking.
-    Returns (chunks, confidence) -- see _hybrid_search's docstring for what
-    confidence actually means and its honest limitations.
+    Returns (chunks, confidence, insufficient_session_data) -- see
+    _hybrid_search's docstring for what confidence actually means, its
+    honest limitations, and what the third value means.
 
     debug=True prints the fused shortlist and final reranked order before
     returning -- diagnostic only, no effect on the returned result."""
     collection = get_session_collection(session_id)
     if collection is None or collection.count() == 0:
-        return [], None
+        return [], None, True
 
     everything = collection.get()
     all_ids = everything.get("ids", [])
@@ -354,12 +381,17 @@ def retrieve(session_id: str, question: str) -> dict:
     Runs the full two-tier retrieval: session tier uses hybrid search +
     reranking (unchanged), KB tier now pulls from LIVE PubMed/OpenFDA
     (primary) with static KB as fallback (see retrieve_kb_context docs).
-    Returns session_chunks, kb_chunks, AND confidence (see
-    _hybrid_search's docstring for exactly what this number does
-    and doesn't mean) so the generation prompt can clearly label which
+    Returns session_chunks, kb_chunks, confidence, AND
+    insufficient_session_data (see _hybrid_search's docstring for exactly
+    what these mean) so the generation prompt can clearly label which
     source is primary (session) and which is supporting-only (KB) --
     matching FE-2 and the prompt rules in prompts.py.
     """
-    session_chunks, confidence = retrieve_session_context(session_id, question)
+    session_chunks, confidence, insufficient_session_data = retrieve_session_context(session_id, question)
     kb_chunks = retrieve_kb_context(session_id, question)
-    return {"session_chunks": session_chunks, "kb_chunks": kb_chunks, "confidence": confidence}
+    return {
+        "session_chunks": session_chunks,
+        "kb_chunks": kb_chunks,
+        "confidence": confidence,
+        "insufficient_session_data": insufficient_session_data,
+    }
