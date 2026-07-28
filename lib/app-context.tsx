@@ -44,6 +44,12 @@ export type SessionData = {
   imagePreviewUrl: string | null
   analysisResult: AnalysisResult | null
   analysisError: string | null
+  // Module 4 (RAG Q&A) session state -- separate from analysisResult above,
+  // a different backend entirely. sessionId powers the Ask Questions
+  // screen; patientCode is the server-generated ID shown to the patient so
+  // they can look up this visit again later.
+  sessionId: string | null
+  patientCode: string | null
 }
 
 const emptySession: SessionData = {
@@ -56,6 +62,8 @@ const emptySession: SessionData = {
   imagePreviewUrl: null,
   analysisResult: null,
   analysisError: null,
+  sessionId: null,
+  patientCode: null,
 }
 
 type AppContextValue = {

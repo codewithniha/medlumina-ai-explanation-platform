@@ -159,6 +159,8 @@ export type QAMessage = {
   id: string
   role: 'patient' | 'ai'
   text: string
+  confidence?: number | null
+  classification?: 'SESSION_GROUNDED' | 'GENERAL_MEDICAL' | 'OFF_TOPIC' | null
 }
 
 export const initialQA: QAMessage[] = [

@@ -31,3 +31,164 @@ export async function runAnalysis(params: AnalyzeParams): Promise<AnalysisResult
 
   return (await res.json()) as AnalysisResult
 }
+
+// ── Module 4 (RAG Q&A backend) — separate FastAPI server, not the Kaggle
+// image-analysis backend above. Called directly from the browser (not
+// through a Next.js API route like runAnalysis), since it doesn't need
+// the image and CORS is already enabled on that server for this reason.
+const MODULE4_API_BASE_URL =
+  process.env.NEXT_PUBLIC_MODULE4_API_BASE_URL || 'http://127.0.0.1:8001'
+
+export type StartSessionPayload = {
+  doctor_report: string
+  xray_findings: Record<string, string>
+  prescribed_medicines: string[]
+  symptoms?: string
+  explanation_level?: 'simple' | 'detailed'
+  patient_code?: string
+  patient_name?: string
+}
+
+export type StartSessionResult = {
+  session_id: string
+  chunks_indexed: number
+  explanation_level: string
+  patient_id: string | null
+  patient_code: string | null
+}
+
+export type AskQuestionResult = {
+  classification: 'SESSION_GROUNDED' | 'GENERAL_MEDICAL' | 'OFF_TOPIC' | null
+  answer: string
+  confidence: number | null
+}
+
+export type PatientSessionSummary = {
+  session_id: string
+  created_at: string
+  explanation_level: string
+}
+
+export type PatientLookupResult = {
+  patient_id: string
+  sessions: PatientSessionSummary[]
+}
+
+export type TurnOut = {
+  question: string
+  classification: 'SESSION_GROUNDED' | 'GENERAL_MEDICAL' | 'OFF_TOPIC' | null
+  answer: string
+  confidence: number | null
+}
+
+export type SessionHistoryResult = {
+  turns: TurnOut[]
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public status?: number) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
+async function module4PostJson<T>(path: string, body: unknown): Promise<T> {
+  let res: Response
+  try {
+    res = await fetch(`${MODULE4_API_BASE_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch {
+    throw new ApiError(
+      `Could not reach the Module 4 backend at ${MODULE4_API_BASE_URL}. Is module4_api.py running?`,
+    )
+  }
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new ApiError(`Backend returned ${res.status}: ${detail}`, res.status)
+  }
+
+  return res.json() as Promise<T>
+}
+
+export function startSession(
+  payload: StartSessionPayload,
+): Promise<StartSessionResult> {
+  return module4PostJson<StartSessionResult>('/session/start', payload)
+}
+
+export function askQuestion(
+  session_id: string,
+  question: string,
+): Promise<AskQuestionResult> {
+  return module4PostJson<AskQuestionResult>('/session/ask', { session_id, question })
+}
+
+export function lookupPatient(
+  patient_code: string,
+): Promise<PatientLookupResult> {
+  return module4PostJson<PatientLookupResult>('/patient/lookup', { patient_code })
+}
+
+export function getSessionHistory(
+  session_id: string,
+): Promise<SessionHistoryResult> {
+  return module4PostJson<SessionHistoryResult>('/session/history', { session_id })
+}
+
+export type HealthResult = {
+  status: string
+  medgemma_configured: boolean
+  medgemma_reachable: boolean
+}
+
+// Real check, not a display fake -- see module4_api.py's /health for why
+// this exists (confirmed live: MedGemma being down while the UI still
+// showed "Online"). Deliberately doesn't throw on failure -- an
+// unreachable backend IS the answer this function needs to report, not
+// an error state the caller has to handle separately.
+export async function checkHealth(): Promise<HealthResult> {
+  try {
+    const res = await fetch(`${MODULE4_API_BASE_URL}/health`, {
+      signal: AbortSignal.timeout(4000),
+    })
+    if (!res.ok) throw new Error('unhealthy')
+    return (await res.json()) as HealthResult
+  } catch {
+    return { status: 'unreachable', medgemma_configured: false, medgemma_reachable: false }
+  }
+}
+
+export type TranscribeReportResult = {
+  extracted_text: string
+  found_text: boolean
+}
+
+// Sends a photo of a doctor's handwritten report for transcription. Uses
+// FormData (multipart upload), not JSON -- this is a real file, not text.
+export async function transcribeReport(image: File): Promise<TranscribeReportResult> {
+  const formData = new FormData()
+  formData.append('image', image)
+
+  let res: Response
+  try {
+    res = await fetch(`${MODULE4_API_BASE_URL}/report/transcribe`, {
+      method: 'POST',
+      body: formData,
+    })
+  } catch {
+    throw new ApiError(
+      `Could not reach the Module 4 backend at ${MODULE4_API_BASE_URL}. Is module4_api.py running?`,
+    )
+  }
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new ApiError(`Backend returned ${res.status}: ${detail}`, res.status)
+  }
+
+  return res.json() as Promise<TranscribeReportResult>
+}

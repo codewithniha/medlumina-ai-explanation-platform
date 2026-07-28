@@ -23,8 +23,16 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader } from './page-header'
+import { useToast } from '@/components/ui/toast'
 import { useApp, type InputMode } from '@/lib/app-context'
-import { runAnalysis } from '@/lib/api-client'
+import {
+  runAnalysis,
+  startSession,
+  lookupPatient,
+  transcribeReport,
+  ApiError,
+  type PatientSessionSummary,
+} from '@/lib/api-client'
 import { cn } from '@/lib/utils'
 
 type UploadPhase = 'idle' | 'uploading' | 'ready'
@@ -161,6 +169,11 @@ function AnalyzingCard({ steps, step }: { steps: string[]; step: number }) {
 
 export function InputScreen() {
   const { navigate, setSession, session, setInputMode } = useApp()
+  const { toast } = useToast()
+  const [lookupCode, setLookupCode] = useState('')
+  const [lookupResults, setLookupResults] = useState<PatientSessionSummary[] | null>(null)
+  const [lookupLoading, setLookupLoading] = useState(false)
+  const [lookupError, setLookupError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const mode = session.inputMode
@@ -170,11 +183,10 @@ export function InputScreen() {
   const [progress, setProgress] = useState(0)
   const [dragging, setDragging] = useState(false)
   const [reportText, setReportText] = useState('')
+  const [transcribing, setTranscribing] = useState(false)
+  const reportImageInputRef = useRef<HTMLInputElement>(null)
   const [symptoms, setSymptoms] = useState('')
-  const [medicines, setMedicines] = useState<string[]>([
-    'Amoxicillin 500mg',
-    'Paracetamol 500mg',
-  ])
+  const [medicines, setMedicines] = useState<string[]>([])
   const [medInput, setMedInput] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzeStep, setAnalyzeStep] = useState(0)
@@ -189,9 +201,15 @@ export function InputScreen() {
     ? prescriptionProcessingSteps
     : xrayProcessingSteps
   // Mode A needs both the image and the doctor's report; Mode B needs the
-  // image; Mode C needs at least one medicine.
+  // image; Mode C needs at least one medicine -- EITHER already confirmed
+  // into the list, OR still sitting typed-but-unconfirmed in the input
+  // box. Confirmed live: a patient can type medicines and never notice
+  // they need to press Enter/click Add first, which left this button
+  // permanently disabled even with real text right there -- the button
+  // must match what analyze()'s safety net (below) actually accepts, or
+  // the safety net never gets a chance to run at all.
   const canAnalyze = isPrescription
-    ? medicines.length > 0
+    ? medicines.length > 0 || medInput.trim().length > 0
     : mode === 'xray_report'
       ? hasImage && hasReport
       : hasImage
@@ -254,10 +272,64 @@ export function InputScreen() {
     return () => clearInterval(timer)
   }, [analyzing, processingSteps.length])
 
+  // Sends a photo of a handwritten report for transcription. Deliberately
+  // APPENDS to (or fills, if empty) reportText rather than auto-submitting
+  // anything -- OCR on messy handwriting is never perfect, especially for
+  // medical terminology, so the patient/doctor always gets to review and
+  // correct the extracted text before it's ever used to answer real
+  // questions. This does NOT touch the X-ray image upload above (that's
+  // Niha's separate real-analysis backend) -- this is a distinct upload
+  // for a distinct purpose: turning a photo of handwriting into editable
+  // text for Module 4.
+  async function handleReportImageUpload(file: File) {
+    setTranscribing(true)
+    try {
+      const result = await transcribeReport(file)
+      if (!result.found_text) {
+        toast({
+          title: 'No readable text found',
+          description: 'Could not find any handwritten text in that photo -- try a clearer photo, or type the report manually.',
+        })
+        return
+      }
+      // Replaces, not appends -- confirmed live that appending caused two
+      // separate full report transcriptions to stack in the same box
+      // across two upload attempts, which read as one broken, confusing
+      // document rather than either being a clean result. A patient
+      // re-uploading a clearer photo expects that to REPLACE the
+      // previous attempt, not pile on top of it.
+      setReportText(result.extracted_text)
+      const hasUncertainMarkers = /\[UNCERTAIN:|\[illegible\]/.test(result.extracted_text)
+      toast({
+        title: hasUncertainMarkers ? 'Some parts couldn\u2019t be read confidently' : 'Text extracted -- please review it',
+        description: hasUncertainMarkers
+          ? 'Look for [UNCERTAIN: ...] or [illegible] in the report below -- those specific medicine names or dosages weren\u2019t clear from the photo. If you can\u2019t read them yourself either, confirm with your doctor or pharmacist before relying on this.'
+          : 'Handwriting recognition isn\u2019t perfect, especially for medicine names and dosages. If you can\u2019t verify these against the original yourself, it\u2019s worth confirming with your doctor or pharmacist before relying on this.',
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error.'
+      toast({
+        title: 'Could not read this image',
+        description: `Is module4_api.py running? (${message})`,
+      })
+    } finally {
+      setTranscribing(false)
+      if (reportImageInputRef.current) reportImageInputRef.current.value = ''
+    }
+  }
+
   function addMedicine() {
-    const value = medInput.trim()
-    if (value && !medicines.includes(value)) {
-      setMedicines((prev) => [...prev, value])
+    // Splits on commas -- a patient typing "Paracetamol, amoxilin, brufen"
+    // in one go expects three separate medicines, not one blob string.
+    const entries = medInput
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+    if (entries.length > 0) {
+      setMedicines((prev) => [
+        ...prev,
+        ...entries.filter((e) => !prev.includes(e)),
+      ])
     }
     setMedInput('')
   }
@@ -268,13 +340,84 @@ export function InputScreen() {
     setErrorMessage(null)
     setSession({ reportText, symptoms, medicines, hasImage })
 
-    // Prescription-only has no backend wired up yet — Module 2/5 only handle
-    // X-ray images, and the medicine/condition-inference module (3/6) wasn't
-    // part of what was uploaded, so this mode stays on demo data for now.
+    // Safety net: fold in any medicine text still sitting unconfirmed in
+    // the input box, so clicking Analyze directly (without pressing Enter
+    // or the Add button first) never silently drops it. Also splits on
+    // commas -- confirmed live, a patient typed "Paracetamol, amoxilin,
+    // brufen" as one comma-separated entry expecting it to work like three
+    // separate medicines, not one blob string sent to the backend.
+    const pendingEntries = medInput
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && !medicines.includes(s))
+    const finalMedicines = [...medicines, ...pendingEntries]
+
+    // Module 4 (RAG Q&A) session -- an entirely separate backend from the
+    // image-analysis one below, doesn't need an image at all, just the
+    // text data. Runs for EVERY mode, including prescription-only (which
+    // otherwise has no real backend wired up at all), so the Ask
+    // Questions screen has something real to talk to regardless of what
+    // happens with image analysis. Failure here is non-fatal and silent
+    // by design -- if Module 4's backend isn't reachable, the patient can
+    // still see their image analysis (if that part succeeds); they just
+    // won't be able to ask follow-up questions until it's back up.
+    //
+    // IMPORTANT: confirmed live that a fully-silent failure here was
+    // actively confusing -- a patient could go through the entire
+    // prescription-only flow correctly, see nothing wrong, and only
+    // discover Module 4 never actually started two screens later on the
+    // Ask Questions page, with zero context about why. Returns
+    // success/failure now so the caller can react appropriately, and
+    // ALWAYS shows a visible toast on failure -- silence was the actual
+    // bug, not a reasonable design choice.
+    async function startModule4Session(): Promise<boolean> {
+      try {
+        const result = await startSession({
+          doctor_report: reportText,
+          xray_findings: reportText.trim() ? { primary_finding: reportText } : {},
+          prescribed_medicines: finalMedicines,
+          symptoms: symptoms.trim() || undefined,
+          patient_code: session.patientCode || undefined,
+        })
+        setSession({ sessionId: result.session_id, patientCode: result.patient_code })
+        if (result.patient_code && result.patient_code !== session.patientCode) {
+          toast({
+            title: `Your Patient ID: ${result.patient_code}`,
+            description:
+              'Save this ID to access this visit again later -- you\u2019ll need it, there\u2019s no other way to look it up.',
+          })
+        }
+        return true
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error.'
+        toast({
+          title: 'Could not start the Q&A session',
+          description: `Is module4_api.py running? (${message})`,
+        })
+        return false
+      }
+    }
+
+    // Prescription-only has no image-analysis backend wired up yet —
+    // Module 2/5 only handle X-ray images, and the medicine/condition-
+    // inference module (3/6) wasn't part of what was uploaded, so that
+    // part stays on demo data for now. Module 4 (Q&A) is the ONLY real
+    // backend this mode has -- if it fails, nothing worked, so don't
+    // navigate onward pretending it did (confirmed live: doing that sent
+    // a patient to a confusing dead-end "No active session" screen with
+    // no explanation).
     if (isPrescription) {
+      const started = await startModule4Session()
+      if (!started) {
+        setAnalyzing(false)
+        setErrorMessage(
+          'Could not start your session -- please check the backend is running and try again.',
+        )
+        return
+      }
       setTimeout(() => {
         setAnalyzing(false)
-        setSession({ analyzed: true })
+        setSession({ analyzed: true, medicines: finalMedicines })
         navigate('report')
       }, 2400)
       return
@@ -284,6 +427,8 @@ export function InputScreen() {
       setAnalyzing(false)
       return
     }
+
+    await startModule4Session()
 
     try {
       const result = await runAnalysis({
@@ -295,6 +440,7 @@ export function InputScreen() {
         analysisResult: result,
         analysisError: null,
         imagePreviewUrl: previewUrl,
+        medicines: finalMedicines,
       })
       setAnalyzing(false)
       navigate('report')
@@ -511,6 +657,100 @@ export function InputScreen() {
 
   const activeOption = modeOptions.find((o) => o.id === mode)
 
+  function checkPastVisits() {
+    const trimmed = lookupCode.trim()
+    if (!trimmed) return
+    setLookupLoading(true)
+    setLookupError(null)
+    setLookupResults(null)
+    lookupPatient(trimmed)
+      .then((result) => setLookupResults(result.sessions))
+      .catch((err: unknown) => {
+        if (err instanceof ApiError && err.status === 404) {
+          setLookupError("That Patient ID wasn't found. Double-check it and try again.")
+        } else {
+          setLookupError(
+            err instanceof Error ? err.message : 'Could not check for past visits.',
+          )
+        }
+        setLookupResults(null)
+      })
+      .finally(() => setLookupLoading(false))
+  }
+
+  function resumeSession(sessionId: string) {
+    setSession({
+      sessionId,
+      analyzed: true,
+      patientCode: lookupCode.trim().toUpperCase(),
+    })
+    navigate('qa')
+  }
+
+  const returningPatientCard = (
+    <Card className="mb-6 border-primary/20 bg-primary/[0.03]">
+      <CardContent className="p-4 sm:p-5">
+        <p className="mb-1 text-sm font-medium">Been here before?</p>
+        <p className="mb-3 text-xs text-muted-foreground">
+          Enter your Patient ID to pick up a past visit instead of starting
+          over. Don't have one? Just fill in the form below -- you'll get a
+          Patient ID automatically once you analyze.
+        </p>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Input
+            value={lookupCode}
+            onChange={(e) => setLookupCode(e.target.value)}
+            placeholder="e.g. PT-A3F9C2"
+            className="h-10"
+          />
+          <Button
+            variant="outline"
+            className="h-10 shrink-0"
+            disabled={!lookupCode.trim() || lookupLoading}
+            onClick={checkPastVisits}
+          >
+            {lookupLoading ? 'Checking...' : 'Check for past visits'}
+          </Button>
+        </div>
+
+        {lookupError && (
+          <p className="mt-2 text-xs text-destructive">{lookupError}</p>
+        )}
+
+        {lookupResults && lookupResults.length === 0 && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            No past visits found for that ID.
+          </p>
+        )}
+
+        {lookupResults && lookupResults.length > 0 && (
+          <div className="mt-3 space-y-1.5">
+            {lookupResults.map((s) => (
+              <button
+                key={s.session_id}
+                type="button"
+                onClick={() => resumeSession(s.session_id)}
+                className="flex w-full items-center justify-between rounded-lg border border-border bg-card px-3 py-2 text-left text-sm transition-colors hover:border-primary/40 hover:bg-primary/5"
+              >
+                <span>
+                  Visit from{' '}
+                  {new Date(s.created_at).toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                  })}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  Continue &rarr;
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+
   return (
     <div>
       <PageHeader
@@ -523,6 +763,8 @@ export function InputScreen() {
         }
         showModeSwitcher={false}
       />
+
+      {returningPatientCard}
 
       {/* Input mode selector */}
       <div className="mb-8">
@@ -537,7 +779,20 @@ export function InputScreen() {
               <button
                 key={opt.id}
                 type="button"
-                onClick={() => setInputMode(opt.id)}
+                onClick={() => {
+                  // Confirmed live: switching modes without clearing
+                  // fields let a doctor's report typed while testing a
+                  // different mode silently carry into a Prescription-
+                  // only submission, where that field isn't even shown
+                  // -- both in the opening message wording AND in what
+                  // actually got sent to the backend. Every mode switch
+                  // now starts genuinely clean.
+                  setReportText('')
+                  setSymptoms('')
+                  setMedicines([])
+                  setMedInput('')
+                  setInputMode(opt.id)
+                }}
                 aria-pressed={active}
                 className={cn(
                   'flex flex-col items-start gap-2 rounded-2xl border-2 p-4 text-left transition-all duration-200',
@@ -625,9 +880,41 @@ export function InputScreen() {
                 placeholder="Paste or type the text from your radiology report here..."
                 className="min-h-32"
               />
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  ref={reportImageInputRef}
+                  type="file"
+                  accept="image/*,application/pdf"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) handleReportImageUpload(file)
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  disabled={transcribing}
+                  onClick={() => reportImageInputRef.current?.click()}
+                >
+                  {transcribing ? (
+                    <>
+                      <Loader2 className="size-3.5 animate-spin" /> Reading handwriting twice to cross-check...
+                    </>
+                  ) : (
+                    <>
+                      <ScanLine className="size-3.5" /> Or upload a photo/PDF of the report
+                    </>
+                  )}
+                </Button>
+              </div>
               <p className="mt-1.5 text-xs text-muted-foreground">
                 We&apos;ll translate your doctor&apos;s findings into plain
-                language rather than diagnosing from scratch.
+                language rather than diagnosing from scratch. Extracted text
+                from a photo always needs your review before analyzing --
+                handwriting recognition isn&apos;t perfect.
               </p>
             </div>
           )}

@@ -15,7 +15,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Check,
-  History,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp, type ScreenId, type InputMode } from '@/lib/app-context'
@@ -67,11 +66,6 @@ function buildNav(mode: InputMode, steps: ScreenId[]): NavItem[] {
     }
   })
 }
-
-const sessionHistory = [
-  { label: 'Chest X-ray · Left lung', date: 'Today' },
-  { label: 'Chest X-ray · Follow-up', date: '2 weeks ago' },
-]
 
 function ProgressCard({ collapsed }: { collapsed: boolean }) {
   const { progress, completedSteps, steps } = useApp()
@@ -216,33 +210,6 @@ function SidebarContent({
           ))}
         </div>
 
-        {/* Session history */}
-        {!collapsed && (
-          <>
-            <p className="flex items-center gap-1.5 px-3 pb-2 pt-6 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-              <History className="size-3" />
-              Recent sessions
-            </p>
-            <div className="space-y-1">
-              {sessionHistory.map((s) => (
-                <button
-                  key={s.label}
-                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-sidebar-accent"
-                >
-                  <span className="size-1.5 shrink-0 rounded-full bg-primary/60" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium text-sidebar-foreground">
-                      {s.label}
-                    </span>
-                    <span className="block text-[11px] text-muted-foreground">
-                      {s.date}
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
       </nav>
 
       {/* Footer: progress + profile */}
