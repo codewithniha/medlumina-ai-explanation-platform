@@ -34,8 +34,9 @@ import {
   type PatientSessionSummary,
 } from '@/lib/api-client'
 import { cn } from '@/lib/utils'
+import { normalizeXrayFile } from '@/lib/xray-file'
 
-type UploadPhase = 'idle' | 'uploading' | 'ready'
+type UploadPhase = 'idle' | 'converting' | 'uploading' | 'ready'
 
 function SectionLabel({
   icon: Icon,
@@ -226,13 +227,32 @@ export function InputScreen() {
   // Takes the real File the patient picked or dropped, previews it locally,
   // and plays a short progress animation before revealing it (the actual
   // upload to the backend only happens later, when Analyze is clicked).
-  function handleFile(file: File) {
+  //
+  // Runs every file through normalizeXrayFile first (see lib/xray-file.ts)
+  // -- that's what converts a PDF or an iPhone HEIC photo into a plain
+  // JPEG/PNG Niha's backend can actually open, or rejects a genuinely
+  // unsupported format with a clear message instead of silently
+  // forwarding bytes her server can't read.
+  async function handleFile(file: File) {
     if (phase !== 'idle') return
-    if (!file.type.startsWith('image/')) return
-    setImageFile(file)
+
+    setPhase('converting')
+    let normalizedFile: File
+    try {
+      normalizedFile = await normalizeXrayFile(file)
+    } catch (err) {
+      setPhase('idle')
+      toast({
+        title: 'Could not use this file',
+        description: err instanceof Error ? err.message : 'Unknown error.',
+      })
+      return
+    }
+
+    setImageFile(normalizedFile)
     setPreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev)
-      return URL.createObjectURL(file)
+      return URL.createObjectURL(normalizedFile)
     })
     setPhase('uploading')
     setProgress(0)
@@ -459,7 +479,7 @@ export function InputScreen() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/png,image/jpeg"
+        accept="image/*,application/pdf"
         className="sr-only"
         onChange={(e) => {
           const file = e.target.files?.[0]
@@ -502,13 +522,24 @@ export function InputScreen() {
             {dragging ? 'Drop to upload' : 'Drag & drop your X-ray here'}
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            or click to browse — PNG or JPG, up to 20MB
+            or click to browse — any photo format or PDF, up to 20MB
           </p>
           <span className="mt-4 inline-flex items-center gap-1.5 rounded-full border border-border bg-background/50 px-3 py-1 text-xs font-medium text-muted-foreground">
             <ShieldCheck className="size-3.5 text-primary" />
             Processed privately for this demo
           </span>
         </button>
+      )}
+
+      {phase === 'converting' && (
+        <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-primary/40 bg-card px-6 py-16">
+          <div className="flex size-16 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+            <Loader2 className="size-8 animate-spin" />
+          </div>
+          <p className="mt-5 text-sm font-semibold text-foreground">
+            Preparing your image...
+          </p>
+        </div>
       )}
 
       {phase === 'uploading' && (
