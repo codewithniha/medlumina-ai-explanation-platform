@@ -23,14 +23,9 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { ConfidenceRing } from '@/components/confidence-ring'
 import { PageHeader } from './page-header'
-import { MedicineCard } from './medicine-screen'
+import { RealMedicineItem } from './medicine-screen'
 import { useApp } from '@/lib/app-context'
-import {
-  mockReport,
-  reportTimeline,
-  mockMedicines,
-  mockInferredCondition,
-} from '@/lib/mock-data'
+import { mockReport, reportTimeline } from '@/lib/mock-data'
 import { mapAnalysisToReport } from '@/lib/report-mapper'
 import { cn } from '@/lib/utils'
 
@@ -148,17 +143,21 @@ function FindingRow({
 }
 
 // Mode C: Medicine & Condition Insight — no image, so medicines are the primary
-// analysis and the likely condition is inferred from them.
+// analysis. The "possible condition inferred from medicines" feature is
+// currently PAUSED by the supervisor pending a decision on whether
+// inferring a diagnosis purely from a medicine list is methodologically
+// sound -- this screen must not show a fabricated confidence number or
+// invented reasoning for that while it's on hold, even as a demo.
 function PrescriptionInsight() {
-  const { navigate, stepEyebrow } = useApp()
-  const inferred = mockInferredCondition
+  const { navigate, stepEyebrow, session } = useApp()
+  const medicines = session.medicines
 
   return (
     <div>
       <PageHeader
         eyebrow={stepEyebrow('report')}
         title="Medicine & Condition Insight"
-        description="Here is what each prescribed medicine is for, and the most likely condition suggested by the combination."
+        description="Here are the medicines you entered for this session."
       />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
@@ -170,55 +169,35 @@ function PrescriptionInsight() {
               Your prescribed medicines
             </h2>
             <Badge variant="secondary" className="ml-1">
-              {mockMedicines.length}
+              {medicines.length}
             </Badge>
           </div>
-          {mockMedicines.map((medicine) => (
-            <MedicineCard key={medicine.name} medicine={medicine} />
-          ))}
+          {medicines.length > 0 ? (
+            medicines.map((name) => <RealMedicineItem key={name} name={name} />)
+          ) : (
+            <div className="rounded-xl border border-border bg-muted/30 p-5 text-sm text-muted-foreground">
+              No medicines were entered for this session.
+            </div>
+          )}
         </div>
 
-        {/* Inferred condition */}
+        {/* Condition inference -- paused, not available */}
         <div className="space-y-4 lg:col-span-5">
-          <Card className="overflow-hidden border-primary/25">
-            <div className="bg-gradient-to-br from-primary/10 via-card to-card">
-              <CardContent className="p-6">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="size-5 text-primary" />
-                  <h3 className="text-base font-bold text-foreground">
-                    Possible condition based on your medicines
-                  </h3>
-                </div>
-                <div className="mt-4 flex items-center gap-4">
-                  <ConfidenceRing value={inferred.confidence} />
-                  <div>
-                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                      Inference confidence
-                    </p>
-                    <p className="text-sm font-semibold text-foreground">
-                      {inferred.confidence}% likely
-                    </p>
-                  </div>
-                </div>
-                <p className="mt-4 text-lg font-bold text-foreground text-balance">
-                  {inferred.condition}
+          <Card className="border-border bg-muted/20">
+            <CardContent className="flex gap-3 p-6">
+              <Sparkles className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+              <div>
+                <p className="text-sm font-semibold text-foreground">
+                  Condition inference isn&apos;t available yet
                 </p>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                  {inferred.reasoning}
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                  Inferring a possible condition purely from a medicine list is
+                  still under review to make sure it&apos;s done in a
+                  methodologically sound way. This section will be enabled
+                  once that review is complete.
                 </p>
-                <ul className="mt-4 space-y-2">
-                  {inferred.signals.map((sig) => (
-                    <li
-                      key={sig}
-                      className="flex items-start gap-2 text-sm text-foreground/90"
-                    >
-                      <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-primary" />
-                      {sig}
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </div>
+              </div>
+            </CardContent>
           </Card>
 
           <Card className="border-amber-500/25 bg-amber-500/5">
@@ -229,10 +208,8 @@ function PrescriptionInsight() {
                   This is not a diagnosis
                 </p>
                 <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                  This possible condition is inferred only from what your
-                  medicines are typically used for — no X-ray or scan was
-                  reviewed. It must be confirmed by a doctor before you act on
-                  it.
+                  Nothing on this page should be treated as a diagnosis. Any
+                  condition information must come from a doctor.
                 </p>
               </div>
             </CardContent>

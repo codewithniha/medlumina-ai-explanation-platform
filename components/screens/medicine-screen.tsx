@@ -5,11 +5,7 @@ import { PageHeader } from './page-header'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useApp } from '@/lib/app-context'
-import {
-  mockMedicines,
-  mockSymptomLinks,
-  type Medicine,
-} from '@/lib/mock-data'
+import { type Medicine } from '@/lib/mock-data'
 import { cn } from '@/lib/utils'
 import {
   Pill,
@@ -150,8 +146,33 @@ export function MedicineCard({ medicine }: { medicine: Medicine }) {
   )
 }
 
+// A single real, patient-entered medicine name -- shown when we only know
+// WHAT was prescribed (from the patient's own input) but not yet the rich
+// details (purpose, dosage, interactions, etc.) that would come from
+// Module 6, which is currently paused pending a supervisor decision on its
+// diagnostic-inference approach. Deliberately does NOT fabricate any of
+// those details -- an honest "we don't know this yet" beats a
+// confident-looking but made-up dosage or warning.
+export function RealMedicineItem({ name }: { name: string }) {
+  return (
+    <div className="flex items-center gap-4 rounded-2xl border border-border bg-card p-5">
+      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+        <Pill className="h-6 w-6" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <h3 className="text-base font-semibold text-foreground">{name}</h3>
+        <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+          Detailed guidance for this medicine (purpose, dosage, interactions)
+          isn&apos;t available yet in this demo.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export function MedicineScreen() {
-  const { navigate, stepEyebrow } = useApp()
+  const { navigate, stepEyebrow, session } = useApp()
+  const medicines = session.medicines
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -169,12 +190,16 @@ export function MedicineScreen() {
               Your prescribed medicines
             </h2>
             <Badge variant="secondary" className="ml-1">
-              {mockMedicines.length}
+              {medicines.length}
             </Badge>
           </div>
-          {mockMedicines.map((medicine) => (
-            <MedicineCard key={medicine.name} medicine={medicine} />
-          ))}
+          {medicines.length > 0 ? (
+            medicines.map((name) => <RealMedicineItem key={name} name={name} />)
+          ) : (
+            <div className="rounded-xl border border-border bg-muted/30 p-5 text-sm text-muted-foreground">
+              No medicines were entered for this session.
+            </div>
+          )}
 
           <div className="flex items-start gap-2 rounded-xl border border-border bg-muted/30 p-4">
             <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
@@ -192,29 +217,21 @@ export function MedicineScreen() {
             <div className="flex items-center gap-2">
               <Activity className="h-5 w-5 text-primary" />
               <h2 className="text-base font-semibold text-foreground">
-                Symptom connections
+                Symptoms you reported
               </h2>
             </div>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              How the symptoms you may feel relate to what the scan shows.
+              What you told us when you started this session.
             </p>
-            <ul className="mt-4 space-y-3">
-              {mockSymptomLinks.map((link) => (
-                <li
-                  key={link.symptom}
-                  className="rounded-xl border border-border bg-muted/40 p-3"
-                >
-                  <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                    <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-                    {link.symptom}
-                  </div>
-                  <div className="mt-1.5 flex items-center gap-1.5 pl-3.5 text-xs text-muted-foreground">
-                    <ArrowRight className="h-3 w-3 text-primary/70" />
-                    {link.finding}
-                  </div>
-                </li>
-              ))}
-            </ul>
+            {session.symptoms ? (
+              <p className="mt-4 rounded-xl border border-border bg-muted/40 p-3 text-sm text-foreground">
+                {session.symptoms}
+              </p>
+            ) : (
+              <p className="mt-4 text-sm text-muted-foreground">
+                No symptoms were entered for this session.
+              </p>
+            )}
           </div>
 
           <div className="rounded-2xl border border-chart-5/25 bg-chart-5/10 p-5">

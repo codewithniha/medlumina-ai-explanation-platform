@@ -102,12 +102,15 @@ def _get_classifier_model():
     return _classifier_model
 
 
-def call_medgemma(prompt: str, temperature: float = 0.3, timeout: int = 180) -> str:
+def call_medgemma(prompt: str, temperature: float = 0.3, timeout: int = 180, max_retries: int = 2) -> str:
     """
     Sends a prompt to the MedGemma server running in your Module 6 Colab
-    notebook, reached via its ngrok tunnel. Raises a clear error if the
-    endpoint is unreachable -- callers (generator.py) are expected to catch
-    this and fall back to a safe message rather than crash the request.
+    notebook, reached via its ngrok tunnel. Raises a clear ConnectionError
+    if the endpoint is unreachable after all retries -- callers
+    (generator.py) are expected to catch this and fall back to a safe
+    message rather than crash the request. Callers don't need to change
+    anything -- the retry happens inside this function, so the external
+    contract (raises ConnectionError, or returns text) is unchanged.
 
     temperature=0.3 matches the server's own default (see Cell 6), kept low
     since this is a medical explanation task, not creative writing --
@@ -118,29 +121,49 @@ def call_medgemma(prompt: str, temperature: float = 0.3, timeout: int = 180) -> 
     because the free-tier Colab GPU intermittently needs that long under
     contention, and even 180s isn't always enough (see fe4_stability_check.py
     live output: Runs 3 and 10 both hit ReadTimeout AT 180s and needed a
-    retry). 60s here was well under even the value Module 6 found
-    insufficient -- almost certainly why the "detailed" test just failed
-    with a connection error while the same server was actually reachable
-    (confirmed live minutes earlier). This module has no retry wrapper like
-    Module 6's safe_invoke() does, so a slow-but-successful call currently
-    has nowhere to recover -- worth adding the same retry pattern here if
-    this keeps happening after the timeout bump alone.
+    retry).
+
+    max_retries=2 (added after a real, confirmed gap): this module had NO
+    retry wrapper -- a single slow-but-otherwise-fine call had nowhere to
+    recover, unlike Module 6's safe_invoke(). Confirmed via a real Module 4
+    evaluation run: out of ~170 real questions, several genuinely legitimate
+    calls needed more than one attempt to complete, and this module was
+    previously giving up on the very first timeout. Only retries on
+    request-level failures (timeout, connection error) -- a successful
+    response with bad content isn't retried here, that's handled by the
+    language-guarantee retry in generator.py instead, which is a different
+    concern.
+
+    Known, honest tradeoff: this can now take up to
+    (timeout * max_retries) seconds in the worst case (~360s at the
+    defaults) before finally giving up, instead of failing fast at 180s.
+    That's the right tradeoff for a known-flaky free-tier GPU tunnel --
+    reducing false failures matters more here than a fast failure --  but
+    worth naming explicitly if a supervisor asks why an answer can be slow.
     """
     if not MEDGEMMA_API_URL:
         raise RuntimeError("MEDGEMMA_API_URL is not set -- start the Colab notebook and copy its ngrok URL into .env.")
 
-    try:
-        response = requests.post(
-            f"{MEDGEMMA_API_URL}/generate",
-            json={"prompt": prompt, "temperature": temperature},
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        data = response.json()
-        raw_text = data.get("text", "").strip()
-        return _strip_stray_devanagari(_strip_thinking_preamble(raw_text))
-    except requests.exceptions.RequestException as e:
-        raise ConnectionError(f"Could not reach MedGemma server at {MEDGEMMA_API_URL}: {e}") from e
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                f"{MEDGEMMA_API_URL}/generate",
+                json={"prompt": prompt, "temperature": temperature},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+            raw_text = data.get("text", "").strip()
+            return _strip_stray_devanagari(_strip_thinking_preamble(raw_text))
+        except requests.exceptions.RequestException as e:
+            last_exc = e
+            if attempt < max_retries - 1:
+                print(f"[llm_client] MedGemma call failed (attempt {attempt + 1}/{max_retries}), retrying: {e}")
+
+    raise ConnectionError(
+        f"Could not reach MedGemma server at {MEDGEMMA_API_URL} after {max_retries} attempts: {last_exc}"
+    ) from last_exc
 
 
 def call_classifier_llm(prompt: str) -> str:
@@ -222,6 +245,56 @@ def _offline_verification() -> bool:
         check("empty input returns empty string, no crash", result == "")
     except Exception as e:
         check(f"empty input raised {type(e).__name__} -- should not crash", False)
+
+    print("\n[TEST 6] call_medgemma retries on timeout, then succeeds")
+    import requests as _requests
+
+    global MEDGEMMA_API_URL
+    original_url = MEDGEMMA_API_URL
+    MEDGEMMA_API_URL = "http://fake-medgemma-for-test"
+
+    call_count = {"n": 0}
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"text": "The X-ray shows normal findings."}
+
+    def _fake_post_fails_once_then_succeeds(url, json, timeout):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise _requests.exceptions.Timeout("simulated timeout on first attempt")
+        return _FakeResponse()
+
+    real_post = _requests.post
+    _requests.post = _fake_post_fails_once_then_succeeds
+    try:
+        result = call_medgemma("test prompt", max_retries=2)
+        check("eventually succeeded after 1 retry", result == "The X-ray shows normal findings.")
+        check("took exactly 2 attempts (1 failure + 1 success)", call_count["n"] == 2)
+    finally:
+        _requests.post = real_post
+
+    print("\n[TEST 7] call_medgemma raises ConnectionError after exhausting all retries")
+    call_count["n"] = 0
+
+    def _fake_post_always_fails(url, json, timeout):
+        call_count["n"] += 1
+        raise _requests.exceptions.Timeout("simulated permanent timeout")
+
+    _requests.post = _fake_post_always_fails
+    try:
+        try:
+            call_medgemma("test prompt", max_retries=3)
+            check("raised ConnectionError after exhausting retries", False)
+        except ConnectionError:
+            check("raised ConnectionError after exhausting retries", True)
+        check("made exactly max_retries attempts, not more", call_count["n"] == 3)
+    finally:
+        _requests.post = real_post
+        MEDGEMMA_API_URL = original_url
 
     print("\n" + "=" * 60)
     print(f"{passed}/{passed + failed} offline verification tests passed.")
