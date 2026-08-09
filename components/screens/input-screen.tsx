@@ -390,11 +390,24 @@ export function InputScreen() {
     // success/failure now so the caller can react appropriately, and
     // ALWAYS shows a visible toast on failure -- silence was the actual
     // bug, not a reasonable design choice.
-    async function startModule4Session(): Promise<boolean> {
+    //
+    // reportTextForModule4/topFindingForModule4 are passed in rather than
+    // closed over, because this used to run BEFORE Niha's X-ray analysis
+    // even started -- meaning her model's real output (findings,
+    // report_text) never reached Module 4 at all, even when her model
+    // worked perfectly. Confirmed by reading the actual call order: this
+    // function was called, THEN runAnalysis() ran afterward and its
+    // result was only ever written to session state for display, never
+    // sent here. Fixed by running analysis FIRST (for image modes) and
+    // folding its real output into what gets sent below.
+    async function startModule4Session(
+      reportTextForModule4: string,
+      topFindingForModule4: string,
+    ): Promise<boolean> {
       try {
         const result = await startSession({
-          doctor_report: reportText,
-          xray_findings: reportText.trim() ? { primary_finding: reportText } : {},
+          doctor_report: reportTextForModule4,
+          xray_findings: topFindingForModule4 ? { primary_finding: topFindingForModule4 } : {},
           prescribed_medicines: finalMedicines,
           symptoms: symptoms.trim() || undefined,
           patient_code: session.patientCode || undefined,
@@ -427,7 +440,7 @@ export function InputScreen() {
     // a patient to a confusing dead-end "No active session" screen with
     // no explanation).
     if (isPrescription) {
-      const started = await startModule4Session()
+      const started = await startModule4Session(reportText, '')
       if (!started) {
         setAnalyzing(false)
         setErrorMessage(
@@ -448,13 +461,43 @@ export function InputScreen() {
       return
     }
 
-    await startModule4Session()
-
+    // Run Niha's real X-ray analysis FIRST -- Module 4 needs its output,
+    // not just whatever the patient manually typed.
     try {
       const result = await runAnalysis({
         image: imageFile,
         reportText: mode === 'xray_report' ? reportText : undefined,
       })
+
+      // Build the REAL text Module 4 should explain: her model's own
+      // generated report_text, plus a plain-language line for any
+      // finding it flagged as actually present (>50% probability -- an
+      // honest threshold choice, not tuned/cherry-picked; below 50% the
+      // model itself is saying "more likely absent than present").
+      const positiveFindings = Object.entries(result.findings ?? {})
+        .filter(([, f]) => (f.positive_prob ?? f.probability ?? 0) > 0.5)
+        .sort(
+          ([, a], [, b]) =>
+            (b.positive_prob ?? b.probability ?? 0) - (a.positive_prob ?? a.probability ?? 0),
+        )
+
+      const findingsLine = positiveFindings.length
+        ? `X-ray analysis detected: ${positiveFindings
+            .map(
+              ([disease, f]) =>
+                `${disease} (${Math.round((f.positive_prob ?? f.probability ?? 0) * 100)}% confidence)`,
+            )
+            .join(', ')}.`
+        : ''
+
+      const combinedReportText = [result.report_text, findingsLine, reportText.trim()]
+        .filter((part) => part && part.trim().length > 0)
+        .join('\n\n')
+
+      const topFinding = positiveFindings[0]?.[0] ?? ''
+
+      await startModule4Session(combinedReportText, topFinding)
+
       setSession({
         analyzed: true,
         analysisResult: result,
@@ -469,6 +512,14 @@ export function InputScreen() {
       const message = err instanceof Error ? err.message : 'Analysis failed. Please try again.'
       setErrorMessage(message)
       setSession({ analysisError: message })
+
+      // Her model failing shouldn't take Module 4 down with it -- start a
+      // session with whatever the patient manually typed, if anything, so
+      // Ask Questions still has SOMETHING real to work with rather than
+      // being completely dead because a different backend was down.
+      if (reportText.trim()) {
+        await startModule4Session(reportText, '')
+      }
     }
   }
 
