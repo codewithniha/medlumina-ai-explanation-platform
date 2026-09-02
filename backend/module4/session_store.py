@@ -208,6 +208,29 @@ def get_patient_sessions(patient_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_patient_id_for_session(session_id: str) -> str | None:
+    """
+    Reverse lookup: given a session_id, returns the patient_id it belongs
+    to, or None if the session doesn't exist or is an anonymous session
+    (patient_id was never set -- see create_session()'s docstring).
+
+    Needed for the trend-comparison feature: the Q&A pipeline only ever
+    receives session_id from the frontend (see AskRequest in
+    module4_api.py), never patient_id directly. This is the one lookup
+    that lets module4_pipeline.py find "which other sessions belong to
+    this same person" starting from just the current session_id it
+    already has.
+    """
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT patient_id FROM sessions WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return row["patient_id"]
+
+
 def create_session(explanation_level: str = "simple", patient_id: str | None = None) -> str:
     """
     Creates a new patient session and returns its session_id.
@@ -425,6 +448,20 @@ def _offline_verification() -> bool:
         print("\n[TEST 13] An anonymous session (no patient_id) still works exactly as before")
         anon_sid = create_session()
         check("anonymous session creation still works", session_exists(anon_sid))
+
+        print("\n[TEST 13b] get_patient_id_for_session() finds the right patient for a linked session")
+        pid_link, _ = create_patient(name="Link Test Patient")
+        linked_sid = create_session(patient_id=pid_link)
+        check("reverse lookup returns the correct patient_id",
+              get_patient_id_for_session(linked_sid) == pid_link)
+
+        print("\n[TEST 13c] get_patient_id_for_session() returns None for an anonymous session")
+        check("anonymous session has no patient_id",
+              get_patient_id_for_session(anon_sid) is None)
+
+        print("\n[TEST 13d] get_patient_id_for_session() returns None for an unknown session_id, doesn't crash")
+        check("unknown session_id returns None",
+              get_patient_id_for_session("not-a-real-session-id") is None)
 
         print("\n[TEST 14] log_turn() with a real confidence value stores and returns it correctly")
         conf_sid = create_session()
