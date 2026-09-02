@@ -43,6 +43,7 @@ from kb_indexer import get_chroma_client, KB_COLLECTION_NAME, _embedding_fn
 from session_indexer import get_session_collection
 from kb_data import KB_ENTRIES
 from embedding_config import embed_query_text
+from session_store import get_patient_sessions
 
 _KB_CONDITION_NAMES = [entry["condition"].lower() for entry in KB_ENTRIES]
 
@@ -374,6 +375,64 @@ def retrieve_kb_context(session_id: str, question: str, top_k_per_term: int = 2)
 
     print(f"[KB-DEBUG] total kb_chunks returned: {len(kb_chunks)}")
     return kb_chunks
+
+
+def get_patient_visit_history(patient_id: str, exclude_session_id: str | None = None) -> list[dict]:
+    """
+    Pulls this patient's doctor_report and xray_finding chunks from EACH
+    of their past sessions' own isolated Chroma collection (see
+    session_indexer.py -- collections are already fully separated per
+    session, so there's no risk of one visit's data leaking into
+    another's here), one block per visit, labeled with that visit's real
+    created_at date.
+
+    Returns visits in CHRONOLOGICAL order (earliest first) -- this is the
+    order the trend-comparison prompt is instructed to reason in, so the
+    model is never left to guess which visit is more recent.
+
+    exclude_session_id: pass the CURRENT session_id to skip re-including
+    it if it's already indexed by the time this is called -- avoids the
+    same visit showing up twice.
+
+    A session is silently skipped (not shown as an empty visit) if it has
+    no doctor_report or xray_finding chunks -- e.g. a session where the
+    upload never fully completed. This mirrors the existing
+    insufficient_session_data honesty pattern elsewhere in this file:
+    better to omit a visit with nothing real to show than to show an
+    empty, misleading entry.
+
+    Only doctor_report and xray_finding chunks are pulled (not
+    prescribed_medicine or symptoms) -- those two sources are what
+    actually describe the patient's CONDITION across time, which is what
+    a trend comparison is about; medicines/symptoms chunks would add
+    noise without helping answer "has my condition changed".
+    """
+    sessions_desc = get_patient_sessions(patient_id)  # already DESC by created_at
+    sessions_chronological = list(reversed(sessions_desc))
+
+    visits = []
+    for s in sessions_chronological:
+        session_id = s["session_id"]
+        if exclude_session_id and session_id == exclude_session_id:
+            continue
+
+        collection = get_session_collection(session_id)
+        if collection is None or collection.count() == 0:
+            continue
+
+        report_result = collection.get(where={"source": "doctor_report"})
+        finding_result = collection.get(where={"source": "xray_finding"})
+        chunks = report_result.get("documents", []) + finding_result.get("documents", [])
+        if not chunks:
+            continue
+
+        visits.append({
+            "session_id": session_id,
+            "created_at": s["created_at"],
+            "chunks": chunks,
+        })
+
+    return visits
 
 
 def retrieve(session_id: str, question: str) -> dict:

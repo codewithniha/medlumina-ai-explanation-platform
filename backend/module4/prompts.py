@@ -10,8 +10,9 @@ CLASSIFIER_PROMPT_TEMPLATE = """You are a routing classifier for a medical suppo
 
 The question may be written in English or Urdu (including Urdu typed in English letters, i.e. Roman Urdu) -- classify based on its MEANING, regardless of which language or script it's written in.
 
-Your ONLY job is to decide which of these three categories the question falls into:
-- "SESSION_GROUNDED": a question about THIS specific patient's own diagnosis, X-ray findings, prescribed medicines, or their own report. Personal and specific to their case.
+Your ONLY job is to decide which of these four categories the question falls into:
+- "SESSION_GROUNDED": a question about THIS specific patient's own diagnosis, X-ray findings, prescribed medicines, or their own report, from THIS current visit. Personal and specific to their case, with no explicit comparison to a different, earlier visit.
+- "TREND_COMPARISON": the patient is explicitly asking to compare their condition ACROSS TIME -- against a previous visit, an earlier X-ray, or "before" in general. Look for comparison/change language: "compare", "since last time", "since my last visit", "improved", "improving", "getting better", "getting worse", "worse now", "than before", "how do I look now". This is different from SESSION_GROUNDED because it needs data from MORE THAN ONE visit, not just the current one.
 - "GENERAL_MEDICAL": a real medical knowledge question, not tied to any specific patient -- e.g. "what is X disease", "what causes Y", "how does medicine Z work". Answerable from general medical knowledge, useful to both patients and doctors.
 - "OFF_TOPIC": not a medical question at all -- general knowledge, location/directions, small talk, or anything unrelated to health or medicine.
 
@@ -34,10 +35,15 @@ Examples:
 "What's the weather today?" -> OFF_TOPIC
 "مجھے نمونیا کیوں ہے؟" (Urdu for "Why do I have pneumonia?") -> SESSION_GROUNDED
 "نمونیا کیا ہے؟" (Urdu for "What is pneumonia?") -> GENERAL_MEDICAL
+"Am I improving since my last visit?" -> TREND_COMPARISON
+"Compare my current X-ray with my last one" -> TREND_COMPARISON
+"Is my condition worse now than before?" -> TREND_COMPARISON
+"How does this report compare to my previous one?" -> TREND_COMPARISON
+"کیا میری حالت پہلے سے بہتر ہے؟" (Urdu for "Is my condition better than before?") -> TREND_COMPARISON
 
 Question: "{question}"
 
-Respond with EXACTLY one word: SESSION_GROUNDED, GENERAL_MEDICAL, or OFF_TOPIC. No other text."""
+Respond with EXACTLY one word: SESSION_GROUNDED, TREND_COMPARISON, GENERAL_MEDICAL, or OFF_TOPIC. No other text."""
 
 
 # ── FE-4: knowledge-level adaptation ────────────────────────────────────────
@@ -104,6 +110,63 @@ DECLINE_MESSAGE_URDU = (
     "میں، یا عمومی طبی معلومات کے بارے میں۔ یہ سوال طبی معلوم نہیں ہوتا، اس لیے میں اس میں "
     "مدد نہیں کر سکتا۔"
 )
+
+# ── Trend comparison: canned, no-LLM-call messages ──────────────────────────
+# Same pattern as DECLINE_MESSAGE above -- deterministic, no LLM call, for
+# the two cases where a real comparison genuinely cannot be produced. Kept
+# as fixed text rather than left to the LLM's judgment because free-text
+# instructions to MedGemma have been confirmed unreliable in this project
+# (see generator.py's language-guarantee retry, and the "give me a short
+# answer" compliance test noted in the chat history) -- for something this
+# structural (does data exist or not), a canned message is the honest,
+# deterministic choice, not a shortcut.
+TREND_NO_PATIENT_MESSAGE = (
+    "I can't compare across visits because this session isn't linked to a saved patient ID. "
+    "Comparing your condition over time needs your PT- patient code from a previous visit -- "
+    "if you have one, start a new session with that code entered so this visit gets linked to "
+    "your past ones."
+)
+
+TREND_NO_PATIENT_MESSAGE_URDU = (
+    "میں وقت کے ساتھ موازنہ نہیں کر سکتا کیونکہ یہ سیشن کسی محفوظ شدہ مریض آئی ڈی سے منسلک نہیں ہے۔ "
+    "وقت کے ساتھ آپ کی حالت کا موازنہ کرنے کے لیے آپ کے پچھلے وزٹ کا PT- مریض کوڈ درکار ہے -- اگر آپ "
+    "کے پاس ایک ہے تو، اس کوڈ کے ساتھ ایک نیا سیشن شروع کریں تاکہ یہ وزٹ آپ کے پچھلے وزٹس سے منسلک ہو سکے۔"
+)
+
+TREND_INSUFFICIENT_HISTORY_MESSAGE = (
+    "This looks like your only visit on record so far, so there's nothing yet to compare it "
+    "against. Once you've uploaded a report from a later visit, I'll be able to tell you how "
+    "things have changed."
+)
+
+TREND_INSUFFICIENT_HISTORY_MESSAGE_URDU = (
+    "یہ ابھی تک ریکارڈ میں آپ کا واحد وزٹ لگتا ہے، اس لیے موازنے کے لیے فی الحال کچھ نہیں ہے۔ جب آپ "
+    "کسی بعد کے وزٹ کی رپورٹ اپلوڈ کر لیں گے، تو میں آپ کو بتا سکوں گا کہ حالت میں کیا تبدیلی آئی ہے۔"
+)
+
+TREND_COMPARISON_PROMPT_TEMPLATE = """You are a medical assistant helping a patient understand how their condition has changed across multiple visits, using ONLY their own real, dated visit records below.
+
+STRICT RULES:
+1. The visit records below are labeled with their real dates and given in chronological order (earliest first). Always reason about them IN THAT ORDER -- never assume which one is more recent by any means other than the label actually printed on it.
+2. Base your comparison ONLY on what is actually written in the visit records below. Do not invent a trend, a percentage, or a diagnosis that isn't directly supported by the text of at least two of the visits being compared.
+3. If the visit records don't actually contain enough overlapping information to say clearly whether things improved or worsened (e.g. different, unrelated findings mentioned each time, or one visit has very little data), say so honestly -- e.g. "the records don't give a clear enough picture to say for certain" -- rather than forcing a verdict.
+4. When you can support a real conclusion, state plainly whether the patient's condition appears to have improved, worsened, or stayed about the same, and point to the SPECIFIC findings from each dated visit that support that -- always naming which visit (with its date) each piece of evidence came from.
+5. {complexity_instruction}
+6. Language: detect the language of the patient's QUESTION (English or Urdu, including Roman Urdu) and write your ENTIRE answer in that same language -- do not mix languages. If answering in Urdu, write ONLY in Urdu script (Arabic/Nastaliq) -- never Hindi/Devanagari script.
+7. Do not add your own disclaimer or meta-commentary at the end -- the application already shows a disclaimer separately.
+8. This is a comparison of what the AI-generated reports and findings say across visits -- it is not a new diagnosis and not medical advice. If the comparison suggests the patient's condition may have worsened, encourage them to discuss it with their doctor, but do not tell them what to do about it clinically.
+9. If a visit record contains an [UNCERTAIN: ...] or [illegible] marker, do not treat that detail as confirmed when comparing -- note that it wasn't clearly readable rather than building a conclusion on it.
+
+--- PATIENT'S VISIT HISTORY, CHRONOLOGICAL ORDER (earliest first) ---
+{visit_history}
+
+--- RECENT CONVERSATION (for follow-up context) ---
+{conversation_history}
+
+Patient's question: {question}
+
+Answer:"""
+
 
 GENERAL_MEDICAL_PROMPT_TEMPLATE = """You are a medical information assistant used by both patients and doctors. Answer the following general medical question using your own medical knowledge.
 

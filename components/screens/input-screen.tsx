@@ -769,6 +769,29 @@ export function InputScreen() {
     navigate('qa')
   }
 
+  // NEW: the upload flow already supports starting a fresh session linked
+  // to an EXISTING patient -- startModule4Session() above already reads
+  // session.patientCode and sends it as patient_code, and the backend
+  // (module4_api.py's /session/start) already links a new session to the
+  // existing patient rather than creating a new one when patient_code
+  // matches a real, already-registered patient. What was missing was any
+  // UI action that actually SETS session.patientCode without also jumping
+  // straight to an old chat -- resumeSession() above does the latter,
+  // which is a different, deliberate action (continue a past visit).
+  // This is the other, previously-unreachable path: stay on this
+  // upload screen, with the patient code attached, so the user can go
+  // through the normal upload -> analyze flow for a genuinely NEW visit
+  // that still gets linked back to the same patient record.
+  function startNewVisitForPatient() {
+    const trimmed = lookupCode.trim().toUpperCase()
+    setSession({ patientCode: trimmed, sessionId: null, analyzed: false })
+    toast({
+      title: `New visit linked to ${trimmed}`,
+      description:
+        'Fill in the form below as usual for this visit -- it will be saved under the same Patient ID.',
+    })
+  }
+
   const returningPatientCard = (
     <Card className="mb-6 border-primary/20 bg-primary/[0.03]">
       <CardContent className="p-4 sm:p-5">
@@ -827,6 +850,23 @@ export function InputScreen() {
                 </span>
               </button>
             ))}
+          </div>
+        )}
+
+        {/* Shown after ANY successful lookup (patient code found), whether
+            they have 0 or more past visits -- this is the "start a genuinely
+            new visit, still linked to this same patient" action, distinct
+            from resuming one of the visits listed above. */}
+        {lookupResults !== null && !lookupError && (
+          <div className="mt-3">
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-9 w-full sm:w-auto"
+              onClick={startNewVisitForPatient}
+            >
+              + Start a new visit for this patient
+            </Button>
           </div>
         )}
       </CardContent>

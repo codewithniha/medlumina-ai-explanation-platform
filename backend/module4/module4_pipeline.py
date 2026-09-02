@@ -7,16 +7,24 @@ one of three different paths depending on what the question actually is,
 rather than a single retrieve-then-generate path with a binary decline.
 """
 
-from classifier import classify_question, SESSION_GROUNDED, GENERAL_MEDICAL, OFF_TOPIC
-from retriever import retrieve
+from classifier import classify_question, SESSION_GROUNDED, TREND_COMPARISON, GENERAL_MEDICAL, OFF_TOPIC
+from retriever import retrieve, get_patient_visit_history
 from generator import (
     generate_answer,
     generate_general_medical_answer,
+    generate_trend_comparison_answer,
     GENERATION_FAILED_MESSAGE,
     CONNECTION_ERROR_MESSAGE,
 )
-from prompts import DECLINE_MESSAGE, DECLINE_MESSAGE_URDU
-from session_store import log_turn, session_exists
+from prompts import (
+    DECLINE_MESSAGE,
+    DECLINE_MESSAGE_URDU,
+    TREND_NO_PATIENT_MESSAGE,
+    TREND_NO_PATIENT_MESSAGE_URDU,
+    TREND_INSUFFICIENT_HISTORY_MESSAGE,
+    TREND_INSUFFICIENT_HISTORY_MESSAGE_URDU,
+)
+from session_store import log_turn, session_exists, get_patient_id_for_session
 
 
 def _is_urdu(text: str) -> bool:
@@ -41,9 +49,13 @@ def answer_question(session_id: str, question: str) -> dict:
     included in the return value (not hidden) so the API/frontend can show
     it, which is useful for your defense demo.
 
-    Three paths, depending on classify_question()'s result:
+    Four paths, depending on classify_question()'s result:
     - SESSION_GROUNDED: retrieve from THIS patient's own data, generate a
       grounded answer, real confidence score from retrieval quality.
+    - TREND_COMPARISON: retrieve this patient's DATED visit history
+      across sessions and generate a comparison, IF there's real history
+      to compare -- see the two canned, no-LLM-call cases below for when
+      there genuinely isn't.
     - GENERAL_MEDICAL: no patient data involved at all -- answer from
       general medical knowledge. No retrieval happens, so no confidence
       score applies (nothing was matched against anything -- see
@@ -81,6 +93,63 @@ def answer_question(session_id: str, question: str) -> dict:
         # little to compare", which doesn't apply when retrieval never ran
         # at all (the frontend already shows a different, correct message
         # for GENERAL_MEDICAL via the classification field itself).
+        confidence = None
+        log_turn(session_id, question, classification, answer, confidence=confidence)
+        return {
+            "classification": classification,
+            "answer": answer,
+            "retrieved_session_chunks": [],
+            "retrieved_kb_chunks": [],
+            "confidence": confidence,
+            "insufficient_session_data": False,
+        }
+
+    if classification == TREND_COMPARISON:
+        patient_id = get_patient_id_for_session(session_id)
+
+        # Case 1: this session was never linked to a saved patient code --
+        # there is no "history" to find at all, since sessions.patient_id
+        # is how every other visit would be found. Canned message, no LLM
+        # call -- there's nothing a model call could add here.
+        if patient_id is None:
+            answer = TREND_NO_PATIENT_MESSAGE_URDU if _is_urdu(question) else TREND_NO_PATIENT_MESSAGE
+            log_turn(session_id, question, classification, answer)
+            return {
+                "classification": classification,
+                "answer": answer,
+                "retrieved_session_chunks": [],
+                "retrieved_kb_chunks": [],
+                "confidence": None,
+                "insufficient_session_data": False,
+            }
+
+        visits = get_patient_visit_history(patient_id)
+
+        # Case 2: fewer than 2 visits with real data exist for this
+        # patient (e.g. this is their first visit, or every other session
+        # never finished indexing) -- there's nothing to compare AGAINST.
+        # Same reasoning as case 1: canned message, no LLM call.
+        if len(visits) < 2:
+            answer = (
+                TREND_INSUFFICIENT_HISTORY_MESSAGE_URDU if _is_urdu(question)
+                else TREND_INSUFFICIENT_HISTORY_MESSAGE
+            )
+            log_turn(session_id, question, classification, answer)
+            return {
+                "classification": classification,
+                "answer": answer,
+                "retrieved_session_chunks": [],
+                "retrieved_kb_chunks": [],
+                "confidence": None,
+                "insufficient_session_data": False,
+            }
+
+        # Real comparison: at least 2 dated visits with real data exist.
+        answer = generate_trend_comparison_answer(session_id=session_id, question=question, visits=visits)
+        # No retrieval-quality confidence score applies here -- this isn't
+        # a hybrid-search match against a question, it's a direct,
+        # deterministic pull of every real dated visit. Same "None means
+        # no applicable signal" convention used for GENERAL_MEDICAL above.
         confidence = None
         log_turn(session_id, question, classification, answer, confidence=confidence)
         return {

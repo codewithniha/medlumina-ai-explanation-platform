@@ -15,6 +15,7 @@ from llm_client import call_medgemma
 from prompts import (
     GENERATION_PROMPT_TEMPLATE,
     GENERAL_MEDICAL_PROMPT_TEMPLATE,
+    TREND_COMPARISON_PROMPT_TEMPLATE,
     SIMPLE_EXPLANATION_INSTRUCTION,
     DETAILED_EXPLANATION_INSTRUCTION,
 )
@@ -192,6 +193,61 @@ def generate_answer(session_id: str, question: str, session_chunks: list[str], k
     prompt = GENERATION_PROMPT_TEMPLATE.format(
         session_context=session_context,
         kb_context=kb_context,
+        conversation_history=conversation_history,
+        complexity_instruction=complexity_instruction,
+        question=question,
+    )
+
+    return _call_medgemma_with_language_guarantee(prompt, question)
+
+
+def _format_visit_history(visits: list[dict]) -> str:
+    """
+    Turns retriever.get_patient_visit_history()'s output into the dated,
+    ordered text block the TREND_COMPARISON_PROMPT_TEMPLATE expects.
+    visits must already be in chronological order (earliest first) --
+    this function does not re-sort, it only formats and numbers them, so
+    the "Visit 1/2/3" numbering in the prompt matches the real visit
+    order rather than accidentally relabeling them.
+    """
+    if not visits:
+        return "(no visit history available)"
+    blocks = []
+    for i, v in enumerate(visits, start=1):
+        date_str = v["created_at"][:10]  # ISO date only, drop the time part
+        chunk_lines = "\n".join(f"  - {c}" for c in v["chunks"])
+        blocks.append(f"Visit {i} -- {date_str}:\n{chunk_lines}")
+    return "\n\n".join(blocks)
+
+
+def generate_trend_comparison_answer(session_id: str, question: str, visits: list[dict]) -> str:
+    """
+    Constructs the trend-comparison prompt from a patient's dated visit
+    history and calls MedGemma. Mirrors generate_answer()'s structure
+    (same complexity/language handling, same failure-safe pattern) but
+    grounds the answer in MULTIPLE dated visits instead of one session's
+    chunks -- see TREND_COMPARISON_PROMPT_TEMPLATE's strict rules for how
+    cross-visit comparison is constrained to avoid an invented trend.
+
+    Callers (module4_pipeline.py) are responsible for the two cases that
+    should NEVER reach this function at all: no patient_id linked to this
+    session, or fewer than 2 visits with real data -- those get a canned,
+    deterministic message instead (see prompts.py's
+    TREND_NO_PATIENT_MESSAGE / TREND_INSUFFICIENT_HISTORY_MESSAGE), since
+    there is no real comparison to ground an LLM call in for either case.
+    """
+    visit_history = _format_visit_history(visits)
+    conversation_history = _format_conversation_history(session_id)
+
+    explanation_level = get_explanation_level(session_id)
+    complexity_instruction = (
+        DETAILED_EXPLANATION_INSTRUCTION
+        if explanation_level == "detailed"
+        else SIMPLE_EXPLANATION_INSTRUCTION
+    )
+
+    prompt = TREND_COMPARISON_PROMPT_TEMPLATE.format(
+        visit_history=visit_history,
         conversation_history=conversation_history,
         complexity_instruction=complexity_instruction,
         question=question,
