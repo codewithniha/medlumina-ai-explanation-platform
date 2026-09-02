@@ -109,6 +109,14 @@ function MessageBubble({
                 General medical information
               </span>
             )}
+            {message.confidence == null && message.classification === 'TREND_COMPARISON' && (
+              <span
+                className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold text-violet-400"
+                title="This answer compares multiple dated visits from your history -- it's a direct comparison, not a single-report retrieval match, so no confidence score applies here."
+              >
+                Visit comparison
+              </span>
+            )}
             {message.confidence == null &&
               message.classification === 'SESSION_GROUNDED' &&
               message.insufficientSessionData && (

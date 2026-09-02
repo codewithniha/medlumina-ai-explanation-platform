@@ -58,7 +58,7 @@ export type StartSessionResult = {
 }
 
 export type AskQuestionResult = {
-  classification: 'SESSION_GROUNDED' | 'GENERAL_MEDICAL' | 'OFF_TOPIC' | null
+  classification: 'SESSION_GROUNDED' | 'TREND_COMPARISON' | 'GENERAL_MEDICAL' | 'OFF_TOPIC' | null
   answer: string
   confidence: number | null
   insufficient_session_data: boolean
@@ -77,7 +77,7 @@ export type PatientLookupResult = {
 
 export type TurnOut = {
   question: string
-  classification: 'SESSION_GROUNDED' | 'GENERAL_MEDICAL' | 'OFF_TOPIC' | null
+  classification: 'SESSION_GROUNDED' | 'TREND_COMPARISON' | 'GENERAL_MEDICAL' | 'OFF_TOPIC' | null
   answer: string
   confidence: number | null
 }
