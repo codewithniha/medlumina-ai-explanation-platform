@@ -19,7 +19,7 @@ import { PageHeader } from './page-header'
 import { BrandLogo } from '@/components/brand-logo'
 import { useToast } from '@/components/ui/toast'
 import { useApp } from '@/lib/app-context'
-import { mockReport, mockMedicines, mockInferredCondition } from '@/lib/mock-data'
+import { mapAnalysisToReport } from '@/lib/report-mapper'
 
 const nextSteps = [
   'Take your full course of antibiotics, even if you feel better.',
@@ -63,21 +63,27 @@ export function SummaryScreen() {
   const { resetSession, session, stepEyebrow } = useApp()
   const isPrescription = session.inputMode === 'prescription_only'
 
+  // Real analysis mapping -- same function report-screen.tsx already uses
+  // correctly. null when no real analysis has run yet (e.g. analysis
+  // failed, or this is a prescription-only session with no image at all).
+  const report = session.analysisResult ? mapAnalysisToReport(session.analysisResult) : null
+
   const headerCards = isPrescription
     ? [
         { label: 'Input type', value: 'Prescription' },
-        { label: 'Medicines', value: `${mockMedicines.length} items` },
-        { label: 'Possible condition', value: 'Chest infection' },
-        {
-          label: 'Inference confidence',
-          value: `${mockInferredCondition.confidence}%`,
-        },
+        { label: 'Medicines', value: `${session.medicines.length} items` },
+        // Condition inference from medicines alone is currently paused
+        // pending a methodology review (same reasoning as
+        // report-screen.tsx's PrescriptionInsight) -- do not show a
+        // fabricated condition or confidence number here either.
+        { label: 'Possible condition', value: 'Under review' },
+        { label: 'Inference confidence', value: 'Not available' },
       ]
     : [
         { label: 'Scan type', value: 'Chest X-ray (PA)' },
-        { label: 'Confidence', value: `${mockReport.confidence}%` },
-        { label: 'Severity', value: mockReport.severity },
-        { label: 'Medicines', value: `${mockMedicines.length} items` },
+        { label: 'Confidence', value: report ? `${report.confidence}%` : 'Not available' },
+        { label: 'Severity', value: report?.severity ?? 'Not available' },
+        { label: 'Medicines', value: `${session.medicines.length} items` },
       ]
 
   return (
@@ -118,7 +124,9 @@ export function SummaryScreen() {
               <Badge variant="warning" className="mt-2">
                 {isPrescription
                   ? 'Inferred insight'
-                  : `${mockReport.severity} finding`}
+                  : report
+                    ? `${report.severity} finding`
+                    : 'Not yet analyzed'}
               </Badge>
             </div>
           </div>
@@ -151,48 +159,47 @@ export function SummaryScreen() {
           >
             {isPrescription ? (
               <>
-                {mockInferredCondition.reasoning} The most likely condition
-                behind this prescription is{' '}
-                <span className="font-medium text-foreground">
-                  {mockInferredCondition.condition}
-                </span>
-                . This is inferred from your medicines only and must be
-                confirmed by a doctor.
+                Inferring a possible condition purely from a medicine list is
+                still under review to make sure it&apos;s done in a
+                methodologically sound way. This section will be enabled once
+                that review is complete -- nothing here should be treated as
+                a diagnosis.
               </>
+            ) : report ? (
+              <>{report.plainSummary}</>
             ) : (
               <>
-                Your chest X-ray shows a small area of early-stage infection
-                (pneumonia) in the lower part of your left lung. Your heart,
-                bones, and pleural spaces look normal. This was caught early and
-                is very treatable.
+                No analysis has been completed for this session yet -- go
+                back to Upload X-ray to run one.
               </>
             )}
           </SummaryBlock>
 
-          {!isPrescription && (
+          {!isPrescription && report && (
             <SummaryBlock icon={ScanEye} title="Key visual finding">
-              {mockReport.findings[0].detail} The highlighted region on your
+              {report.findings[0]?.detail ?? 'No specific finding details are available for this analysis.'} The highlighted region on your
               visual explanation marks exactly where this appears.
             </SummaryBlock>
           )}
 
           <SummaryBlock icon={Pill} title="Medicine overview">
-            <ul className="space-y-1.5">
-              {mockMedicines.map((m) => (
-                <li key={m.name} className="flex gap-2">
-                  <Activity className="mt-0.5 size-3.5 shrink-0 text-primary" />
-                  <span>
-                    <span className="font-medium text-foreground">
-                      {m.name}
-                    </span>{' '}
-                    — {m.purpose}{' '}
-                    <span className="text-foreground/70">
-                      ({m.dosage}, {m.timing})
+            {session.medicines.length > 0 ? (
+              <ul className="space-y-1.5">
+                {session.medicines.map((name) => (
+                  <li key={name} className="flex gap-2">
+                    <Activity className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                    <span>
+                      <span className="font-medium text-foreground">{name}</span>{' '}
+                      <span className="text-foreground/70">
+                        (detailed purpose, dosage, and interactions aren&apos;t available yet in this demo)
+                      </span>
                     </span>
-                  </span>
-                </li>
-              ))}
-            </ul>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No medicines were entered for this session.</p>
+            )}
           </SummaryBlock>
 
           <SummaryBlock icon={CalendarClock} title="Next-step guidance">

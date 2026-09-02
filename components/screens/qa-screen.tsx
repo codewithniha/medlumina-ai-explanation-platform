@@ -19,7 +19,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { PageHeader } from './page-header'
 import { useToast } from '@/components/ui/toast'
 import { useApp } from '@/lib/app-context'
-import { askQuestion, getSessionHistory, checkHealth } from '@/lib/api-client'
+import { askQuestion, getSessionHistory, checkHealth, updateExplanationLevel } from '@/lib/api-client'
 import { cn } from '@/lib/utils'
 import {
   suggestedQuestions,
@@ -166,6 +166,8 @@ function MessageBubble({
 export function QAScreen() {
   const { toast } = useToast()
   const { session, stepEyebrow } = useApp()
+  const [explanationLevel, setExplanationLevel] = useState<'simple' | 'detailed'>('simple')
+  const [changingLevel, setChangingLevel] = useState(false)
   const isPrescription = session.inputMode === 'prescription_only'
   const chips = isPrescription
     ? prescriptionSuggestedQuestions
@@ -533,6 +535,39 @@ export function QAScreen() {
       })
   }
 
+  // Calls the REAL, already-built backend endpoint (module4_api.py's
+  // /session/explanation_level) -- previously fully functional but
+  // unreachable from the UI at all. This is a DELIBERATE, explicit
+  // control -- not natural-language detection of a request like "make
+  // this shorter" typed into the chat, which the classifier has no way
+  // to distinguish from a genuine content question. An explicit toggle
+  // is slower to discover but actually reliable, instead of silently
+  // doing nothing the way the chat-based version confirmed live it did.
+  async function handleExplanationLevelChange(level: 'simple' | 'detailed') {
+    if (level === explanationLevel || changingLevel) return
+    if (!session.sessionId) {
+      toast({
+        title: 'No active session',
+        description: 'Upload a report first before changing answer detail.',
+      })
+      return
+    }
+    setChangingLevel(true)
+    try {
+      await updateExplanationLevel(session.sessionId, level)
+      setExplanationLevel(level)
+      toast({
+        title: level === 'detailed' ? 'Switched to detailed answers' : 'Switched to simple answers',
+        description: 'This applies to your next question onward.',
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error.'
+      toast({ title: 'Could not change answer detail level', description: message })
+    } finally {
+      setChangingLevel(false)
+    }
+  }
+
   const busy = typing || !!streamingId
 
   return (
@@ -628,6 +663,43 @@ export function QAScreen() {
                 <Share2 className="size-4" />
                 Share
               </Button>
+            </div>
+
+            {/* Answer detail level -- explicit toggle, calls the real
+                /session/explanation_level endpoint. See handler comment
+                above for why this is a button, not chat-text detection. */}
+            <div className="flex items-center gap-2 border-b border-border px-5 py-2.5">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Answer detail:
+              </span>
+              <div className="flex overflow-hidden rounded-full border border-border">
+                <button
+                  type="button"
+                  disabled={changingLevel}
+                  onClick={() => handleExplanationLevelChange('simple')}
+                  className={cn(
+                    'px-3 py-1 text-xs font-medium transition-colors disabled:opacity-60',
+                    explanationLevel === 'simple'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted/50',
+                  )}
+                >
+                  Simple
+                </button>
+                <button
+                  type="button"
+                  disabled={changingLevel}
+                  onClick={() => handleExplanationLevelChange('detailed')}
+                  className={cn(
+                    'px-3 py-1 text-xs font-medium transition-colors disabled:opacity-60',
+                    explanationLevel === 'detailed'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted/50',
+                  )}
+                >
+                  Detailed
+                </button>
+              </div>
             </div>
 
             {/* Messages */}

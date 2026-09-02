@@ -128,6 +128,19 @@ export function askQuestion(
   return module4PostJson<AskQuestionResult>('/session/ask', { session_id, question })
 }
 
+// Wraps a REAL, already-built backend endpoint (module4_api.py's
+// /session/explanation_level, backed by set_explanation_level() -- FE-4)
+// that was fully functional but had ZERO frontend connection until now --
+// confirmed live: asking the assistant in plain English to "give a
+// shorter answer" did nothing, because that's a content question to
+// /session/ask, not a request this endpoint ever got called for.
+export function updateExplanationLevel(
+  session_id: string,
+  explanation_level: 'simple' | 'detailed',
+): Promise<{ session_id: string; explanation_level: string }> {
+  return module4PostJson('/session/explanation_level', { session_id, explanation_level })
+}
+
 export function lookupPatient(
   patient_code: string,
 ): Promise<PatientLookupResult> {
