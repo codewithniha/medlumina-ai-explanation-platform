@@ -214,9 +214,21 @@ def _format_visit_history(visits: list[dict]) -> str:
         return "(no visit history available)"
     blocks = []
     for i, v in enumerate(visits, start=1):
-        date_str = v["created_at"][:10]  # ISO date only, drop the time part
+        # Minute-precision timestamp (UTC, matching how created_at is
+        # actually stored -- see session_store.py's
+        # datetime.now(timezone.utc).isoformat()), NOT date-only.
+        # Confirmed live: two visits created minutes apart during the
+        # same testing session both showed as "2026-09-02" with a
+        # date-only label, making them visually indistinguishable in the
+        # answer even though the underlying chronological ORDER (driven
+        # by the real created_at sort in retriever.py, not by this label)
+        # was always correct. This is purely a display fix -- it changes
+        # nothing about which visit is Visit 1 vs Visit 2.
+        # created_at is stored like "2026-09-02T17:18:03.123456+00:00";
+        # [:16] keeps "2026-09-02T17:18", then swap T for a space.
+        timestamp_str = v["created_at"][:16].replace("T", " ") + " UTC"
         chunk_lines = "\n".join(f"  - {c}" for c in v["chunks"])
-        blocks.append(f"Visit {i} -- {date_str}:\n{chunk_lines}")
+        blocks.append(f"Visit {i} -- {timestamp_str}:\n{chunk_lines}")
     return "\n\n".join(blocks)
 
 

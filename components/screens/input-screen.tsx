@@ -839,10 +839,12 @@ export function InputScreen() {
               >
                 <span>
                   Visit from{' '}
-                  {new Date(s.created_at).toLocaleDateString(undefined, {
+                  {new Date(s.created_at).toLocaleString(undefined, {
                     year: 'numeric',
                     month: 'short',
                     day: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit',
                   })}
                 </span>
                 <span className="text-xs text-muted-foreground">
