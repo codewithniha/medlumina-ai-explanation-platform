@@ -9,6 +9,20 @@ export type AnalysisFinding = {
   source_sentence?: string
   region_count?: number | null
   localized?: boolean | null
+  // Circle positions, in pixels of the model's square-padded X-ray (side = canvas_px).
+  // Sent by Niha's Module 5 once she adds them; older results do not have them.
+  regions?: AnalysisRegion[] | null
+  canvas_px?: number | null
+  // Set by a doctor edit
+  doctor_status?: 'confirmed' | 'added'
+}
+
+export type AnalysisRegion = {
+  center_xy: [number, number]
+  radius_px: number
+  bbox_xyxy?: [number, number, number, number] | null
+  peak_activation?: number | null
+  area_px?: number | null
 }
 
 export type QualifiedNotShown = {

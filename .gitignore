@@ -21,3 +21,11 @@ backend/module4/chroma_store/
 backend/module4/sessions.db
 *.pyc
 tsconfig.tsbuildinfo
+
+# Private patient data and keys (never commit)
+backend/module4/private_store/
+backend/module4/*.db
+backend/module4/*.db-wal
+backend/module4/*.db-shm
+.data_key
+backend/module4/sessions.db.bak*

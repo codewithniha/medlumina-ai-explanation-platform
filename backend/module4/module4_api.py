@@ -1,19 +1,24 @@
 """
 module4_api.py
 
-Minimal FastAPI layer for Module 4, mirroring the style of your Module 6
-module6_api.py. Two endpoints:
+FastAPI layer for Module 4. Since step 3b EVERY endpoint except /health
+requires a logged-in patient or a PMDC-verified doctor (see auth_api.py,
+access_control.py), and a record / visit can only be used by the account that
+owns it.
 
-  POST /session/start   -> creates a new patient session, indexes their
-                            report/findings/medicines, returns a session_id
-  POST /session/ask      -> asks a question within an existing session,
-                            returns the classification + answer
+  POST /auth/...        -> register / login / logout / me   (auth_api.py)
+  /admin/...            -> approve or reject doctors        (admin_api.py)
+  GET  /records         -> the caller's own records (for the "continue or new" picker)
+  POST /session/start   -> creates a new visit, indexes report/findings/medicines
+  POST /session/ask     -> asks a question within the caller's own visit
+  /visits/...           -> save + read back a visit's report and images  (visits_api.py)
+  /doctor/...           -> verified-doctor-only review routes            (doctor_api.py)
 
 Run with: uvicorn module4_api:app --reload --port 8001
 (port 8001 so it doesn't collide with Module 6's API if both run locally)
 """
 
-from fastapi import FastAPI, HTTPException, File, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
@@ -22,14 +27,20 @@ import requests
 from llm_client import MEDGEMMA_API_URL
 from ocr import transcribe_handwritten_report, transcribe_report_from_pdf
 
+from accounts_schema import init_accounts_schema
+from access_control import claim_new_record, owned_patient_id, require_end_user, session_is_owned
+from admin_api import router as admin_router
+from auth_api import get_db, router as auth_router
+from doctor_api import router as doctor_router
+from dicom_api import router as dicom_router
+from dicom_store import init_dicom_schema
 from kb_indexer import ensure_kb_indexed
+from visits_api import router as visits_router
 from session_store import (
     create_session,
-    session_exists,
     set_explanation_level,
     VALID_EXPLANATION_LEVELS,
     create_patient,
-    get_patient_by_code,
     get_patient_sessions,
     get_recent_turns,
 )
@@ -41,11 +52,18 @@ MAX_REPORT_FILE_BYTES = 20 * 1024 * 1024  # 20MB -- matches lib/api-client.ts
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_accounts_schema()   # no-op once applied; backs up sessions.db before the first migration
+    init_dicom_schema()      # table for the encrypted DICOM originals (idempotent)
     ensure_kb_indexed()
     yield
 
 
 app = FastAPI(title="MedLumina Module 4 - QA RAG", lifespan=lifespan)
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(visits_router)
+app.include_router(doctor_router)
+app.include_router(dicom_router)
 
 # ── CORS: lets the Next.js frontend actually call this API from a browser ──
 # Without this, the browser blocks every request with a CORS error before it
@@ -85,6 +103,18 @@ class StartSessionResponse(BaseModel):
     explanation_level: str
     patient_id: str | None = None
     patient_code: str | None = None     # ALWAYS show this to the user if present -- it's the only way they can look up this visit again later
+
+
+class RecordSummary(BaseModel):
+    patient_code: str
+    name: str
+    created_at: str
+    visit_count: int
+    last_visit_at: str | None = None
+
+
+class RecordsResponse(BaseModel):
+    records: list[RecordSummary]
 
 
 class PatientLookupRequest(BaseModel):
@@ -148,7 +178,7 @@ class TranscribeReportResponse(BaseModel):
 
 
 @app.post("/report/transcribe", response_model=TranscribeReportResponse)
-async def transcribe_report(image: UploadFile = File(...)):
+async def transcribe_report(image: UploadFile = File(...), user: dict = Depends(require_end_user)):
     """
     Accepts a doctor's report -- either a photo (handwritten or printed)
     or a PDF (typed/printed reports commonly come this way from real
@@ -200,8 +230,29 @@ async def transcribe_report(image: UploadFile = File(...)):
     )
 
 
+@app.get("/records", response_model=RecordsResponse)
+def my_records(user: dict = Depends(require_end_user), db=Depends(get_db)):
+    """
+    The caller's OWN records only (a record = one person's whole history, a
+    patient_code). Feeds the "continue an existing record / start a new one"
+    picker, so nobody has to type a PT-code from memory.
+    """
+    rows = db.execute(
+        """
+        SELECT p.patient_code, p.name, p.created_at,
+               COUNT(s.session_id) AS visit_count, MAX(s.created_at) AS last_visit_at
+        FROM patients p LEFT JOIN sessions s ON s.patient_id = p.patient_id
+        WHERE p.owner_user_id = ?
+        GROUP BY p.patient_id
+        ORDER BY COALESCE(MAX(s.created_at), p.created_at) DESC
+        """,
+        (user["user_id"],),
+    ).fetchall()
+    return RecordsResponse(records=[RecordSummary(**dict(r)) for r in rows])
+
+
 @app.post("/session/start", response_model=StartSessionResponse)
-def start_session(req: StartSessionRequest):
+def start_session(req: StartSessionRequest, user: dict = Depends(require_end_user), db=Depends(get_db)):
     # Originally required doctor_report or xray_findings -- but
     # "Prescription / Medicines Only" has always been a real, offered mode
     # in the UI (medicines + optional symptoms, no report or X-ray at
@@ -229,8 +280,10 @@ def start_session(req: StartSessionRequest):
     #   system-generated identity automatically. No typing required from
     #   the user; the code is generated here and returned below so the
     #   frontend can show it to them to save for next time.
+    # Step 3b: the code must belong to the CALLER. Someone else's code gets
+    # exactly the same 404 as a code that does not exist.
     if req.patient_code.strip():
-        patient_id = get_patient_by_code(req.patient_code)
+        patient_id = owned_patient_id(db, user, req.patient_code)
         if patient_id is None:
             raise HTTPException(
                 status_code=404,
@@ -239,6 +292,7 @@ def start_session(req: StartSessionRequest):
         patient_code = req.patient_code.strip().upper()
     else:
         patient_id, patient_code = create_patient(name=req.patient_name)
+        claim_new_record(db, user, patient_id)   # the new record belongs to the caller
 
     session_id = create_session(explanation_level=req.explanation_level, patient_id=patient_id)
     n_chunks = index_session_data(
@@ -258,7 +312,7 @@ def start_session(req: StartSessionRequest):
 
 
 @app.post("/patient/lookup", response_model=PatientLookupResponse)
-def lookup_patient(req: PatientLookupRequest):
+def lookup_patient(req: PatientLookupRequest, user: dict = Depends(require_end_user), db=Depends(get_db)):
     """
     Called BEFORE /session/start, when a returning patient/doctor types
     their patient_code into the app. Lets the frontend show "Welcome
@@ -270,7 +324,7 @@ def lookup_patient(req: PatientLookupRequest):
     An unknown code is a real 404 here -- deliberately does NOT silently
     create a new patient under a typo (unlike the old phone-based version).
     """
-    patient_id = get_patient_by_code(req.patient_code)
+    patient_id = owned_patient_id(db, user, req.patient_code)   # own records only
     if patient_id is None:
         raise HTTPException(
             status_code=404,
@@ -284,7 +338,8 @@ def lookup_patient(req: PatientLookupRequest):
 
 
 @app.post("/session/explanation_level")
-def update_explanation_level(req: ExplanationLevelRequest):
+def update_explanation_level(req: ExplanationLevelRequest, user: dict = Depends(require_end_user),
+                             db=Depends(get_db)):
     """
     Lets a patient switch between "simple" and "detailed" mid-conversation
     without starting a new session -- e.g. they start on "simple" and later
@@ -293,7 +348,7 @@ def update_explanation_level(req: ExplanationLevelRequest):
     of the same field; drop this endpoint if you'd rather keep FE-4 to
     exactly what was scoped.
     """
-    if not session_exists(req.session_id):
+    if not session_is_owned(db, user, req.session_id):
         raise HTTPException(status_code=404, detail="Session not found. Call /session/start first.")
     if req.explanation_level not in VALID_EXPLANATION_LEVELS:
         raise HTTPException(
@@ -305,8 +360,8 @@ def update_explanation_level(req: ExplanationLevelRequest):
 
 
 @app.post("/session/ask", response_model=AskResponse)
-def ask(req: AskRequest):
-    if not session_exists(req.session_id):
+def ask(req: AskRequest, user: dict = Depends(require_end_user), db=Depends(get_db)):
+    if not session_is_owned(db, user, req.session_id):
         raise HTTPException(status_code=404, detail="Session not found. Call /session/start first.")
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
@@ -323,7 +378,7 @@ def ask(req: AskRequest):
 
 
 @app.post("/session/history", response_model=SessionHistoryResponse)
-def session_history(req: SessionHistoryRequest):
+def session_history(req: SessionHistoryRequest, user: dict = Depends(require_end_user), db=Depends(get_db)):
     """
     Returns every real Q&A turn logged for this session (log_turn() has
     always saved every turn to SQLite -- this endpoint just exposes that
@@ -331,7 +386,7 @@ def session_history(req: SessionHistoryRequest):
     restore the chat when the patient navigates away and back, or reopens
     the app later on the same session.
     """
-    if not session_exists(req.session_id):
+    if not session_is_owned(db, user, req.session_id):
         raise HTTPException(status_code=404, detail="Session not found.")
     turns = get_recent_turns(req.session_id, limit=200)
     return SessionHistoryResponse(turns=[TurnOut(**t) for t in turns])

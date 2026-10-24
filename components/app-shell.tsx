@@ -15,10 +15,14 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Check,
+  LogOut,
+  FolderOpen,
+  Stethoscope,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useApp, type ScreenId, type InputMode } from '@/lib/app-context'
 import { BrandLogo } from '@/components/brand-logo'
+import { useAuth } from '@/lib/auth-context'
 
 type NavItem = {
   id: ScreenId
@@ -54,6 +58,8 @@ const stepMeta: Record<
   qa: { icon: MessagesSquare, label: 'Ask Questions' },
   medicine: { icon: Pill, label: 'Medicine & Symptoms' },
   summary: { icon: ClipboardCheck, label: 'Summary' },
+  records: { icon: FolderOpen, label: 'My Records' },
+  doctor: { icon: Stethoscope, label: 'Doctor Dashboard' },
 }
 
 function buildNav(mode: InputMode, steps: ScreenId[]): NavItem[] {
@@ -160,6 +166,19 @@ function SidebarContent({
   onNavigate?: () => void
 }) {
   const { screen, navigate, completedSteps, session, steps } = useApp()
+  const { user, signOut } = useAuth()
+  const displayName = user?.full_name?.trim() || user?.email || 'Signed in'
+  const initials =
+    displayName
+      .split(/[\s@.]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((p) => p[0]?.toUpperCase())
+      .join('') || '?'
+  const roleLabel =
+    user?.role === 'doctor'
+      ? `Doctor${user.display_id ? ` · ${user.display_id}` : ''}`
+      : 'Patient account'
   const workflowNav = buildNav(session.inputMode, steps)
   return (
     <>
@@ -185,6 +204,44 @@ function SidebarContent({
             <Home className="size-[18px] shrink-0" />
             {!collapsed && 'Home'}
           </button>
+          <button
+            onClick={() => {
+              navigate('records')
+              onNavigate?.()
+            }}
+            title={collapsed ? 'My Records' : undefined}
+            aria-current={screen === 'records' ? 'page' : undefined}
+            className={cn(
+              'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors',
+              collapsed && 'justify-center px-0',
+              screen === 'records'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+            )}
+          >
+            <FolderOpen className="size-[18px] shrink-0" />
+            {!collapsed && 'My Records'}
+          </button>
+          {user?.role === 'doctor' && (
+            <button
+              onClick={() => {
+                navigate('doctor')
+                onNavigate?.()
+              }}
+              title={collapsed ? 'Doctor Dashboard' : undefined}
+              aria-current={screen === 'doctor' ? 'page' : undefined}
+              className={cn(
+                'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors',
+                collapsed && 'justify-center px-0',
+                screen === 'doctor'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+              )}
+            >
+              <Stethoscope className="size-[18px] shrink-0" />
+              {!collapsed && 'Doctor Dashboard'}
+            </button>
+          )}
         </div>
 
         {/* Workflow group */}
@@ -232,19 +289,30 @@ function SidebarContent({
           )}
         >
           <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-bold text-primary">
-            AP
+            {initials}
           </div>
           {!collapsed && (
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-sidebar-foreground">
-                Alex Patient
+                {displayName}
               </p>
               <p className="truncate text-[11px] text-muted-foreground">
-                Demo account
+                {roleLabel}
               </p>
             </div>
           )}
         </div>
+        <button
+          onClick={() => void signOut()}
+          title={collapsed ? 'Sign out' : undefined}
+          className={cn(
+            'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent',
+            collapsed && 'justify-center px-0',
+          )}
+        >
+          <LogOut className="size-[18px] shrink-0" />
+          {!collapsed && 'Sign out'}
+        </button>
       </div>
     </>
   )

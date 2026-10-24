@@ -18,6 +18,8 @@ export type ScreenId =
   | 'qa'
   | 'medicine'
   | 'summary'
+  | 'records'   // My Records: saved visits fetched from the server
+  | 'doctor'    // Doctor Dashboard: review view (verified doctors only)
 
 // The three ways a patient can use MedLumina.
 export type InputMode = 'xray_report' | 'xray_only' | 'prescription_only'

@@ -27,6 +27,7 @@ import { useToast } from '@/components/ui/toast'
 import { useApp, type InputMode } from '@/lib/app-context'
 import {
   runAnalysis,
+  saveAnalysis,
   startSession,
   lookupPatient,
   transcribeReport,
@@ -34,7 +35,7 @@ import {
   type PatientSessionSummary,
 } from '@/lib/api-client'
 import { cn } from '@/lib/utils'
-import { normalizeXrayFile } from '@/lib/xray-file'
+import { getDicomToken, normalizeXrayFile } from '@/lib/xray-file'
 
 type UploadPhase = 'idle' | 'converting' | 'uploading' | 'ready'
 
@@ -187,6 +188,8 @@ export function InputScreen() {
   const [transcribing, setTranscribing] = useState(false)
   const reportImageInputRef = useRef<HTMLInputElement>(null)
   const [symptoms, setSymptoms] = useState('')
+  // Optional label for a NEW record, so records can be told apart in My Records.
+  const [recordName, setRecordName] = useState('')
   const [medicines, setMedicines] = useState<string[]>([])
   const [medInput, setMedInput] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
@@ -239,7 +242,9 @@ export function InputScreen() {
     setPhase('converting')
     let normalizedFile: File
     try {
-      normalizedFile = await normalizeXrayFile(file)
+      normalizedFile = await normalizeXrayFile(file, (message) =>
+        toast({ title: 'About this image', description: message }),
+      )
     } catch (err) {
       setPhase('idle')
       toast({
@@ -403,7 +408,7 @@ export function InputScreen() {
     async function startModule4Session(
       reportTextForModule4: string,
       topFindingForModule4: string,
-    ): Promise<boolean> {
+    ): Promise<string | null> {
       try {
         const result = await startSession({
           doctor_report: reportTextForModule4,
@@ -411,6 +416,7 @@ export function InputScreen() {
           prescribed_medicines: finalMedicines,
           symptoms: symptoms.trim() || undefined,
           patient_code: session.patientCode || undefined,
+          patient_name: session.patientCode ? undefined : recordName.trim() || undefined,
         })
         setSession({ sessionId: result.session_id, patientCode: result.patient_code })
         if (result.patient_code && result.patient_code !== session.patientCode) {
@@ -420,14 +426,14 @@ export function InputScreen() {
               'Save this ID to access this visit again later -- you\u2019ll need it, there\u2019s no other way to look it up.',
           })
         }
-        return true
+        return result.session_id
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error.'
         toast({
           title: 'Could not start the Q&A session',
           description: `Is module4_api.py running? (${message})`,
         })
-        return false
+        return null
       }
     }
 
@@ -496,7 +502,29 @@ export function InputScreen() {
 
       const topFinding = positiveFindings[0]?.[0] ?? ''
 
-      await startModule4Session(combinedReportText, topFinding)
+      const newSessionId = await startModule4Session(combinedReportText, topFinding)
+
+      // Step 4b-2: keep the report, findings and images on the SERVER too, so
+      // they survive a refresh and appear under "My Records". Failure here is
+      // shown but does not block the patient from reading their results.
+      if (newSessionId) {
+        try {
+          const saved = await saveAnalysis(newSessionId, result, imageFile, getDicomToken(imageFile))
+          if (saved.dicomRetained === false) {
+            toast({
+              title: 'Saved, but the original DICOM file was not kept',
+              description: saved.dicomMessage ?? 'Your results are saved; only the original file is missing.',
+            })
+          }
+        } catch (saveErr) {
+          toast({
+            title: 'Your results could not be saved to your account',
+            description:
+              (saveErr instanceof Error ? saveErr.message : 'Unknown error.') +
+              ' You can still read them now, but they will not appear in My Records.',
+          })
+        }
+      }
 
       setSession({
         analyzed: true,
@@ -530,7 +558,7 @@ export function InputScreen() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*,application/pdf"
+        accept="image/*,application/pdf,.dcm,.dicom,application/dicom"
         className="sr-only"
         onChange={(e) => {
           const file = e.target.files?.[0]
@@ -573,7 +601,7 @@ export function InputScreen() {
             {dragging ? 'Drop to upload' : 'Drag & drop your X-ray here'}
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            or click to browse — any photo format or PDF, up to 20MB
+            or click to browse — photo, PDF (up to 20MB) or DICOM .dcm (up to 60MB)
           </p>
           <span className="mt-4 inline-flex items-center gap-1.5 rounded-full border border-border bg-background/50 px-3 py-1 text-xs font-medium text-muted-foreground">
             <ShieldCheck className="size-3.5 text-primary" />
@@ -889,6 +917,25 @@ export function InputScreen() {
       />
 
       {returningPatientCard}
+
+      {!session.patientCode && (
+        <div className="mb-6">
+          <label htmlFor="record-name" className="mb-1.5 block text-sm font-medium">
+            Record name <span className="font-normal text-muted-foreground">(optional)</span>
+          </label>
+          <Input
+            id="record-name"
+            value={recordName}
+            onChange={(e) => setRecordName(e.target.value)}
+            maxLength={200}
+            placeholder="e.g. Ali Khan, or Dad's chest X-ray"
+            className="h-10"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Helps you tell your records apart in My Records. Only you can see it.
+          </p>
+        </div>
+      )}
 
       {/* Input mode selector */}
       <div className="mb-8">
